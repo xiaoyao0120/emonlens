@@ -276,13 +276,28 @@ EmonLens 与竞品的能力分布是互补的：
 
 > 目标一句话：补齐 Agent 特有评测形态，让 security 维度有真实证据来源。
 
-#### R3-1 多轮会话仿真（REPLAY-SIM）
+#### R3-1 多轮会话仿真（REPLAY-SIM）　✅ 已实现（persona 驱动 / 每轮入 trace / 三相成本）
 
 - **对标**：DeepEval ConversationSimulator（persona、停止条件）；LangSmith simulate multi-turn。
 - **方案要点**：
   - 新 run 模式 `REPLAY_SIM`：平台按 persona + 场景生成模拟用户轮次，被测 Agent 两种接入方式——HTTP 端点直连（promptfoo provider 模式），或 SDK runner（用户环境起 agent，复用 R1-1 push 通道）。
   - 复用样本契约 v2 的 turns 结构与 3 个对话预设评估器；停止条件（最大轮数 / 目标达成 / persona 满意度）；预算与缓存沿用。
 - **验收标准**：仿真会话完整入 trace 体系（可观测可回放）；成本核算分 generation / simulation / judge 三相。
+- **实现落点**：`ConversationSimulator` + `SimulationReportService` +
+  `POST /datasets/{id}/runs/async`（`mode=REPLAY_SIM` + `simulation{persona,goal,maxTurns,endpointUrl,model,temperature}`）+
+  `GET /datasets/{id}/runs/{runId}/simulation` + 快照层 `MODE_REPLAY_SIM`（仿真配置进候选指纹）。
+  - **接入方式**：HTTP 端点直连（`POST {input, sessionId, turn}` → `{output, usage?}`，纯文本回复也接受）。
+    SDK runner 通道未实现（见偏差）。
+  - **每轮入 trace**：一轮一条 trace（同一 `sessionId`，带 `input/output/content{prompt,completion}`），
+    会话页能整段回放，评估器照常读候选内容。
+  - **样本契约复用**：仿真轮次写进样本快照的 `turns`，3 个对话预设评估器直接可用。
+  - **停止条件**：模拟用户宣告 `satisfied`（命中后该条消息不再发给 Agent）／`maxTurns`／Agent 或模拟器报错；
+    实测「3 次模拟发言 → 2 个轮次（第 3 次宣告达成后不再调用 Agent）」。
+  - **三相成本**：`usagePhases{simulation,generation,judge}` 逐样本记账，run 级由 `…/simulation` 汇总；
+    `generation` 的 token 只有端点回报 usage 时才有（缺就不计入，不按 0 充数）。
+  - **SSRF 防护**：默认拒绝回环/私网端点，只有 `emonlens.sim.allow-private-targets=true` 才放行。
+  - 已知偏差：① 只支持 HTTP 直连，SDK runner 通道未实现；② "目标达成"靠模拟用户 LLM 自评，没有独立判定器；
+    ③ 仿真调用只计调用数，不参与 token 预算熔断（端点侧 token 由被测方记账）。
 
 #### R3-2 安全评测包　✅ 已实现（内置攻击种子 / OWASP 映射 / Gate 安全红线）
 

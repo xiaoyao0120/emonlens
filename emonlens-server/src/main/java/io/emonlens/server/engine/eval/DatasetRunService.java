@@ -136,6 +136,23 @@ public class DatasetRunService {
                                String suiteId, String requestKey, java.math.BigDecimal maxCost,
                                io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef,
                                String runLabel, String commitSha) {
+        return accept(workspaceId, datasetId, evaluatorIds, revisionId, mode, systemPrompt, model,
+                candidateLabel, candidateFingerprint, maxExternalCalls, maxTokens, reviewMode,
+                suiteId, requestKey, maxCost, promptRef, runLabel, commitSha, null);
+    }
+
+    /**
+     * R3-1：REPLAY_SIM 受理时额外冻结仿真配置（persona / maxTurns / endpointUrl）。
+     * 仿真配置进候选指纹，因此换 persona 或换端点就是换候选。
+     */
+    public AcceptResult accept(String workspaceId, String datasetId, List<String> evaluatorIds,
+                               String revisionId, String mode, String systemPrompt, String model,
+                               String candidateLabel, String candidateFingerprint,
+                               Integer maxExternalCalls, Long maxTokens, String reviewMode,
+                               String suiteId, String requestKey, java.math.BigDecimal maxCost,
+                               io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef,
+                               String runLabel, String commitSha,
+                               Map<String, Object> simulation) {
         Integer budget = normalizeMaxExternalCalls(maxExternalCalls);
         Long tokenBudget = normalizeMaxTokens(maxTokens);
         String normalizedReviewMode = normalizeReviewMode(reviewMode);
@@ -168,7 +185,9 @@ public class DatasetRunService {
         if (key.length() > 128) {
             throw new EmonLensException(ErrorCode.BAD_REQUEST, "Idempotency-Key 不能超过 128 字符");
         }
-        String runMode = DatasetRunSnapshotService.MODE_REPLAY.equalsIgnoreCase(mode)
+        String runMode = DatasetRunSnapshotService.MODE_REPLAY_SIM.equalsIgnoreCase(mode)
+                ? DatasetRunSnapshotService.MODE_REPLAY_SIM
+                : DatasetRunSnapshotService.MODE_REPLAY.equalsIgnoreCase(mode)
                 ? DatasetRunSnapshotService.MODE_REPLAY : DatasetRunSnapshotService.MODE_TRACE;
         String revisionKey = revisionId == null ? "" : revisionId.trim();
         // prompt 引用在受理时解析成不可变版本：之后 production 指针再移动也不影响本 run 的语义，
@@ -239,7 +258,7 @@ public class DatasetRunService {
 
             DatasetRunSnapshotService.FrozenRun frozen = snapshotService.freeze(
                     dataset, items, evaluators, revision, runMode, systemPrompt, model, budget,
-                    tokenBudget, suiteSnapshot, resolvedPrompt, normalizedCommit);
+                    tokenBudget, suiteSnapshot, resolvedPrompt, normalizedCommit, simulation);
             frozen.getConfigSnapshot().put("reviewMode", normalizedReviewMode);
             if (maxCost != null) {
                 frozen.getConfigSnapshot().put("maxCost", maxCost);
@@ -1900,6 +1919,7 @@ public class DatasetRunService {
         Map<?, ?> generation = asMap(config.get("generation"));
         Map<?, ?> budget = asMap(config.get("budget"));
         Map<?, ?> promptRefMap = asMap(config.get("promptRef"));
+        Map<String, Object> simulationConfig = simulationOf(config);
         io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef = null;
         if (promptRefMap != null && promptRefMap.get("name") != null) {
             promptRef = new io.emonlens.server.engine.prompt.PromptService.PromptRef(
@@ -1919,9 +1939,22 @@ public class DatasetRunService {
                 budget == null || !(budget.get("maxTokens") instanceof Number) ? null
                         : ((Number) budget.get("maxTokens")).longValue(),
                 stringValue(config.get("reviewMode"), null), source.getSuiteId(),
-                requestKey, null, promptRef, null, null);
+                requestKey, null, promptRef, null, null, simulationConfig);
         log.info("dataset run repeated from {}, new run={}", runId, result.getRun().getId());
         return result.getRun();
+    }
+
+    /** 复跑 REPLAY_SIM 时把冻结的仿真配置原样带回（换 persona 就是换候选，不能静默丢失）。 */
+    private Map<String, Object> simulationOf(Map<String, Object> config) {
+        Map<?, ?> raw = asMap(config.get("simulation"));
+        if (raw == null || raw.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> simulation = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : raw.entrySet()) {
+            simulation.put(String.valueOf(entry.getKey()), entry.getValue());
+        }
+        return simulation;
     }
 
     /** 同一数据集内与给定 run 拥有相同候选指纹的 run 数量（repetitions 组大小，含自己）。 */

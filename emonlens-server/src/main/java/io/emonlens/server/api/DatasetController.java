@@ -180,6 +180,11 @@ public class DatasetController {
         /** R1-4：CI 基线标签（如 baseline）与触发提交号 */
         private String runLabel;
         private String commitSha;
+        /**
+         * R3-1：REPLAY_SIM 的仿真配置。
+         * persona / goal / maxTurns / endpointUrl / model / temperature；requried endpointUrl。
+         */
+        private Map<String, Object> simulation;
     }
 
     @Data
@@ -716,7 +721,7 @@ public class DatasetController {
                 request.getCandidateFingerprint(), request.getMaxExternalCalls(),
                 request.getMaxTokens(), request.getReviewMode(), request.getSuiteId(),
                 idempotencyKey, request.getMaxCost(), promptRefOf(request),
-                request.getRunLabel(), request.getCommitSha());
+                request.getRunLabel(), request.getCommitSha(), request.getSimulation());
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("runId", result.getRun().getId());
         payload.put("status", result.getRun().getStatus());

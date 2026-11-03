@@ -1458,6 +1458,81 @@ Gate 里新增检查项 `SECURITY_REDLINE`：
 - security 证据目前进 Gate 与报告，**尚未并入五维信任分的 security 维度**（该维度仍看 SECURITY 类监控 Finding）。
 - 红线固定 0：`securityFail>0` 属于放宽政策，与"政策只能更严"冲突，平台不接受。
 
+---
+
+## 20. 多轮会话仿真（R3-1）
+
+单轮 REPLAY 只测"一问一答"；对话型 Agent 的坑在第二轮之后——用户追问、上下文丢失、越问越偏。
+REPLAY_SIM 让平台自己扮演用户，把一段多轮对话跑完再评估。
+
+### 20.1 起一次仿真
+
+```bash
+curl -s -X POST "$HOST/api/v1/datasets/$DS/runs/async" \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: sim-$(date +%s)" \
+  -d '{
+        "evaluatorIds": ["'$EV'"],
+        "mode": "REPLAY_SIM",
+        "simulation": {
+          "persona": "着急的客户，说话简短，反复要退款进度",
+          "goal": "把退款要回来",
+          "maxTurns": 4,
+          "endpointUrl": "https://your-agent.example.com/chat"
+        }
+      }'
+```
+
+被测端点契约（promptfoo provider 风格）：
+
+```jsonc
+// 请求
+{"input": "我还是没收到退款", "sessionId": "sim-xxx", "turn": 2}
+// 响应（宽松：不返回 JSON 就整段当 output）
+{"output": "我再帮您确认一次退款进度。", "usage": {"promptTokens": 40, "completionTokens": 12}}
+```
+
+- 每轮写一条 trace（同一 `sessionId`），会话页可整段回放。
+- 轮次同时写进样本快照的 `turns`，对话预设评估器（容忍度 / 一致性 / 崩溃恢复）直接可用。
+- 停止条件：模拟用户宣告 `satisfied`（该条消息不再发给 Agent）／`maxTurns`／Agent 或模拟器报错。
+- 端点默认只允许公网地址（SSRF 防护）；自建服务或本地测试需开 `emonlens.sim.allow-private-targets=true`。
+
+### 20.2 三相成本
+
+```bash
+curl -s "$HOST/api/v1/datasets/$DS/runs/$RUN/simulation" -H "Authorization: Bearer $JWT"
+```
+
+```jsonc
+{
+  "sessions": 1, "turns": 2,
+  "stopReasons": {"SATISFIED": 1},
+  "costPhases": {
+    "simulation": {"title": "模拟用户 LLM", "calls": 2, "promptTokens": 240, "completionTokens": 48},
+    "generation": {"title": "被测 Agent",  "calls": 2, "promptTokens": 80,  "completionTokens": 24},
+    "judge":      {"title": "评估器",      "calls": 0, "promptTokens": 0,   "completionTokens": 0}
+  }
+}
+```
+
+三相分开的原因很实际：仿真跑歪通常是"模拟用户太贵"或"Agent 太慢"，混成一个数字查不出是谁的问题。
+`generation` 的 token 只有端点回报 `usage` 时才有——缺就少计入，不按 0 充数。
+
+### 20.3 配置项
+
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| `emonlens.sim.max-turns` | 6 | 单样本最多模拟轮数（请求里的 `maxTurns` 只能更小） |
+| `emonlens.sim.connect-timeout-ms` | 5000 | 连接被测端点超时 |
+| `emonlens.sim.agent-timeout-ms` | 20000 | 单轮应答超时 |
+| `emonlens.sim.allow-private-targets` | false | 允许打到内网/回环（自建服务或测试） |
+
+### 20.4 边界
+
+- 只支持 HTTP 直连；SDK runner 通道（用户环境起 Agent）尚未实现。
+- "目标达成"由模拟用户 LLM 自评，没有独立判定器——persona 提示词写得越具体，停止条件越可靠。
+- 仿真调用只计调用数，不参与 token 预算熔断。
+
 
 
 

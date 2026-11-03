@@ -31,6 +31,17 @@ public class ExperimentInsightController {
 
     private final ExperimentInsightService insightService;
     private final DatasetRunService datasetRunService;
+    private final io.emonlens.server.engine.sim.SimulationReportService simulationReportService;
+
+    /** R3-1：一次 REPLAY_SIM run 的会话摘要与三相成本（simulation / generation / judge）。 */
+    @GetMapping("/runs/{runId}/simulation")
+    @RequiresPermission(Permissions.EVALUATION_QUERY)
+    public ApiResult<Map<String, Object>> simulation(@PathVariable String datasetId,
+                                                     @PathVariable String runId) {
+        var run = datasetRunService.requireRun(CurrentContext.require().getWorkspaceId(),
+                datasetId, runId);
+        return ApiResult.ok(simulationReportService.report(run));
+    }
 
     /** 散点：一行一个 run；minCoverage 用于过滤"判得太少"的点。 */
     @GetMapping("/runs/scatter")

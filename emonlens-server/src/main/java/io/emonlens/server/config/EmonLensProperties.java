@@ -27,6 +27,7 @@ public class EmonLensProperties {
     private Playground playground = new Playground();
     private Feedback feedback = new Feedback();
     private EvaluatorQuality evaluatorQuality = new EvaluatorQuality();
+    private Sim sim = new Sim();
     private Metric metric = new Metric();
     private Push push = new Push();
     private Score score = new Score();
@@ -190,6 +191,18 @@ public class EmonLensProperties {
         private int maxCalls = 1000;
         private long pollIntervalMs = 1000;
         private int workerThreads = 1;
+    }
+
+    /** 多轮会话仿真（R3-1，REPLAY_SIM）。 */
+    @Data
+    public static class Sim {
+        /** 单条样本最多模拟多少轮 */
+        private int maxTurns = 6;
+        private int connectTimeoutMs = 5000;
+        /** 被测 Agent 单轮应答超时 */
+        private int agentTimeoutMs = 20000;
+        /** 允许把仿真打到内网/回环地址（自建服务或测试用；默认禁止以防 SSRF） */
+        private boolean allowPrivateTargets = false;
     }
 
     /** 评估器质量看板（R2-3）：判定阈值与扫描节奏。 */

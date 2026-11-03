@@ -52,6 +52,8 @@ public class DatasetRunSnapshotService {
     public static final String CONTENT_PROCESSING_VERSION = "v1";
     public static final String MODE_TRACE = "TRACE";
     public static final String MODE_REPLAY = "REPLAY";
+    /** R3-1：多轮会话仿真——按 persona 驱动一段对话后再评估 */
+    public static final String MODE_REPLAY_SIM = "REPLAY_SIM";
 
     private final ObjectMapper objectMapper;
     private final EmonLensProperties properties;
@@ -105,7 +107,24 @@ public class DatasetRunSnapshotService {
                             Map<String, Object> suiteSnapshot,
                             io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef,
                             String commitSha) {
-        String mode = MODE_REPLAY.equalsIgnoreCase(requestedMode) ? MODE_REPLAY : MODE_TRACE;
+        return freeze(dataset, items, evaluators, revision, requestedMode, systemPrompt, requestedModel,
+                maxExternalCalls, maxTokens, suiteSnapshot, promptRef, commitSha, null);
+    }
+
+    /**
+     * R3-1：REPLAY_SIM 额外冻结仿真配置（persona / goal / maxTurns / endpointUrl），并让它进候选指纹。
+     *
+     * @param simulation 为空表示非仿真 run
+     */
+    public FrozenRun freeze(DatasetEntity dataset, List<DatasetItemEntity> items,
+                            List<EvaluatorEntity> evaluators, DatasetRevisionEntity revision,
+                            String requestedMode, String systemPrompt, String requestedModel,
+                            Integer maxExternalCalls, Long maxTokens,
+                            Map<String, Object> suiteSnapshot,
+                            io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef,
+                            String commitSha, Map<String, Object> simulation) {
+        String mode = MODE_REPLAY_SIM.equalsIgnoreCase(requestedMode) ? MODE_REPLAY_SIM
+                : MODE_REPLAY.equalsIgnoreCase(requestedMode) ? MODE_REPLAY : MODE_TRACE;
         int maxChars = properties.getDatasetRun().getMaxSnapshotChars();
         if (evaluators == null || evaluators.isEmpty()) {
             throw new EmonLensException(ErrorCode.BAD_REQUEST, "至少需要一个评估器");
@@ -151,16 +170,17 @@ public class DatasetRunSnapshotService {
             sample.put("split", item.getSplit());
             sample.put("failureMode", item.getFailureMode());
 
-            if (MODE_REPLAY.equals(mode)) {
-                freezeReplayItem(sample, item);
-            } else {
+            if (MODE_TRACE.equals(mode)) {
                 freezeTraceItem(sample, item, dataset.getWorkspaceId());
+            } else {
+                // REPLAY 与 REPLAY_SIM 都不绑定 trace：候选内容由执行期产生
+                freezeReplayItem(sample, item);
             }
 
             Map<String, Object> sampleSnapshot = shrinkIfNeeded(sample, maxChars, item.getId());
             FrozenItem fi = new FrozenItem();
             fi.setItemId(item.getId());
-            fi.setTraceId(MODE_REPLAY.equals(mode) ? null : item.getTraceId());
+            fi.setTraceId(MODE_TRACE.equals(mode) ? item.getTraceId() : null);
             fi.setSourceTraceId(item.getTraceId());
             fi.setSampleSnapshot(sampleSnapshot);
             frozen.getItems().add(fi);
@@ -178,6 +198,9 @@ public class DatasetRunSnapshotService {
         config.put("evaluator", evaluatorSnapshots.get(0));
         config.put("evaluators", evaluatorSnapshots);
         config.put("generation", generationSnapshot(mode, systemPrompt, effectiveModel));
+        if (MODE_REPLAY_SIM.equals(mode)) {
+            config.put("simulation", simulationSnapshot(simulation, effectiveModel));
+        }
         config.put("sampleSetHash", Sha256Utils.hash(String.join("\n", sampleHashParts)));
         config.put("sampleCount", ordered.size());
         config.put("contentProcessing", contentPolicySnapshot());
@@ -202,7 +225,8 @@ public class DatasetRunSnapshotService {
         }
         config.put("candidateFingerprint", candidateFingerprint(revision, evaluatorSnapshots, mode,
                 systemPrompt, effectiveModel, suiteSnapshot, dataset.getDomainPackId(),
-                promptRef, commitSha));
+                promptRef, commitSha, MODE_REPLAY_SIM.equals(mode)
+                        ? simulationSnapshot(simulation, effectiveModel) : null));
         frozen.setConfigSnapshot(config);
         return frozen;
     }
@@ -499,12 +523,16 @@ public class DatasetRunSnapshotService {
                                         String mode, String systemPrompt, String effectiveModel,
                                         Map<String, Object> suiteSnapshot, String domainPackId,
                                         io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef,
-                                        String commitSha) {
+                                        String commitSha, Map<String, Object> simulation) {
         StringBuilder material = new StringBuilder();
         material.append(revision == null ? "" : revision.getManifestHash()).append('|')
                 .append(mode).append('|')
                 .append(effectiveModel == null ? "" : effectiveModel).append('|')
                 .append(systemPrompt == null ? "" : systemPrompt);
+        // 仿真配置进指纹：换 persona / 轮数 / 端点就是换候选，旧结论不可比。
+        if (simulation != null) {
+            material.append("|sim:").append(simulation.get("fingerprint"));
+        }
         for (Map<String, Object> snapshot : evaluatorSnapshots) {
             material.append('|').append(snapshot.get("fingerprint"));
         }
@@ -571,6 +599,54 @@ public class DatasetRunSnapshotService {
             generation.put("temperature", 0.2);
         }
         return generation;
+    }
+
+    /**
+     * 仿真配置快照：persona / goal / maxTurns / endpointUrl 参与候选指纹。
+     * 端点指纹只取 scheme://host:port/path（同端点换 query 参数仍视为同一候选），完整 URL 单独存便于回溯。
+     */
+    private Map<String, Object> simulationSnapshot(Map<String, Object> simulation, String fallbackModel) {
+        if (simulation == null) {
+            throw new EmonLensException(ErrorCode.BAD_REQUEST,
+                    "REPLAY_SIM 需要 simulation 配置（persona / maxTurns / endpointUrl）");
+        }
+        String persona = simulation.get("persona") == null ? null : String.valueOf(simulation.get("persona"));
+        String goal = simulation.get("goal") == null ? null : String.valueOf(simulation.get("goal"));
+        String endpointUrl = simulation.get("endpointUrl") == null
+                ? null : String.valueOf(simulation.get("endpointUrl"));
+        if (endpointUrl == null || endpointUrl.isBlank()) {
+            throw new EmonLensException(ErrorCode.BAD_REQUEST, "REPLAY_SIM 需要 simulation.endpointUrl");
+        }
+        int maxTurns = simulation.get("maxTurns") instanceof Number
+                ? ((Number) simulation.get("maxTurns")).intValue()
+                : properties.getSim().getMaxTurns();
+        String model = simulation.get("model") == null
+                ? fallbackModel : String.valueOf(simulation.get("model"));
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("protocol", "conversation-sim/1");
+        snapshot.put("persona", persona);
+        snapshot.put("goal", goal);
+        snapshot.put("maxTurns", Math.max(1, Math.min(maxTurns, properties.getSim().getMaxTurns())));
+        snapshot.put("endpointUrl", endpointUrl);
+        snapshot.put("model", model);
+        snapshot.put("temperature", simulation.get("temperature") instanceof Number
+                ? ((Number) simulation.get("temperature")).doubleValue() : 0.7);
+        snapshot.put("fingerprint", Sha256Utils.hash(persona + "|" + goal + "|"
+                + snapshot.get("maxTurns") + "|" + endpointKey(endpointUrl) + "|" + model + "|"
+                + snapshot.get("temperature")));
+        return snapshot;
+    }
+
+    /** 端点指纹只取 scheme://host:port/path，避免 query 里的临时参数把候选指纹打散。 */
+    private String endpointKey(String endpointUrl) {
+        try {
+            java.net.URI uri = java.net.URI.create(endpointUrl);
+            String port = uri.getPort() > 0 ? ":" + uri.getPort() : "";
+            return (uri.getScheme() == null ? "http" : uri.getScheme()) + "://" + uri.getHost() + port
+                    + (uri.getPath() == null ? "" : uri.getPath());
+        } catch (Exception e) {
+            return endpointUrl;
+        }
     }
 
     private Map<String, Object> contentPolicySnapshot() {

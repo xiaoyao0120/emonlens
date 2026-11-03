@@ -41,6 +41,7 @@ public class DatasetRunWorker {
     private final DatasetRunService datasetRunService;
     private final DatasetRunItemMapper datasetRunItemMapper;
     private final DatasetReplayService datasetReplayService;
+    private final io.emonlens.server.engine.sim.ConversationSimulator conversationSimulator;
     private final EvaluationRunService evaluationRunService;
     private final DatasetRunCredentialStore credentialStore;
     private final RunTokenBudgetStore tokenBudgetStore;
@@ -228,9 +229,79 @@ public class DatasetRunWorker {
         Integer generationCompletionTokens = null;
         String replayOutputForColumn = null;
         int maxChars = properties.getDatasetRun().getMaxSnapshotChars();
+        // R3-1 REPLAY_SIM：三相用量分开记（simulation=模拟用户，generation=被测 Agent，judge=评估器）
+        Map<String, Object> simulationPhases = null;
 
         try {
-            if (DatasetRunSnapshotService.MODE_REPLAY.equals(mode)) {
+            if (DatasetRunSnapshotService.MODE_REPLAY_SIM.equals(mode)) {
+                Map<String, Object> simulationConfig = asMap(config.get("simulation"));
+                Map<String, Object> simGeneration = asMap(config.get("generation"));
+                String simModel = simGeneration == null ? null : asString(simGeneration.get("model"));
+                io.emonlens.server.engine.sim.ConversationSimulator.SimResult sim;
+                try {
+                    sim = conversationSimulator.simulate(run.getWorkspaceId(), run.getId(),
+                            item.getItemId(), sample.getInput(), simulationConfig, simModel);
+                } catch (Exception e) {
+                    String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                    recordFailure(item, EvaluatorEntity.LABEL_ERROR, "SIMULATION_FAILED", message,
+                            evaluators, 0, 0, sample, null, null, null, null, tasks);
+                    return;
+                }
+                if (sim.getTurns().isEmpty()) {
+                    recordFailure(item, EvaluatorEntity.LABEL_ERROR, sim.getStopReason() == null
+                                    ? "SIMULATION_EMPTY" : sim.getStopReason(),
+                            sim.getError() == null ? "仿真没有产生有效轮次" : sim.getError(),
+                            evaluators, sim.getAgentCalls(), 0, sample, null, null, null, null, tasks);
+                    return;
+                }
+                generationCalls = sim.getAgentCalls();
+                generationPromptTokens = sim.getAgentPromptTokens();
+                generationCompletionTokens = sim.getAgentCompletionTokens();
+                simulationPhases = new LinkedHashMap<>();
+                simulationPhases.put("simulation", Map.of(
+                        "calls", sim.getSimulationCalls(),
+                        "promptTokens", sim.getSimulationPromptTokens(),
+                        "completionTokens", sim.getSimulationCompletionTokens()));
+                simulationPhases.put("generation", Map.of(
+                        "calls", sim.getAgentCalls(),
+                        "promptTokens", sim.getAgentPromptTokens() == null ? 0 : sim.getAgentPromptTokens(),
+                        "completionTokens", sim.getAgentCompletionTokens() == null
+                                ? 0 : sim.getAgentCompletionTokens()));
+                simulationPhases.put("stopReason", sim.getStopReason());
+                simulationPhases.put("turns", sim.getTurns().size());
+                simulationPhases.put("traceIds", sim.getTraceIds());
+                simulationPhases.put("sessionId", sim.getSessionId());
+                sample.setTraceId(sim.getSessionId());
+                sample.setSourceTraceId(null);
+                if (sample.getAgentKey() == null || sample.getAgentKey().isBlank()) {
+                    sample.setAgentKey(io.emonlens.server.engine.sim.ConversationSimulator.AGENT_KEY);
+                    sample.setAgentVersion("sim");
+                }
+                sample.setCandidateOutput(sim.getTranscript());
+                sample.setSpanCount(sim.getTraceIds().size());
+                sample.setErrorCount("AGENT_ERROR".equals(sim.getStopReason())
+                        || "SIMULATOR_ERROR".equals(sim.getStopReason()) ? 1 : 0);
+                sample.setToolCalls(0L);
+                sample.setLlmCalls((long) sim.getTurns().size());
+                boolean simComplete = sim.getTranscript() == null
+                        || sim.getTranscript().length() <= maxChars;
+                sample.setCandidateComplete(simComplete);
+                sample.setContentStatus(simComplete ? "COMPLETE" : "CONTENT_TRUNCATED");
+                sample.setContentStatusReason(simComplete ? null
+                        : "仿真会话超过快照上限 " + maxChars + " 字符，无法完整评估");
+                sample.getContents().put("prompt", sample.getInput());
+                sample.getContentCaptureModes().put("prompt", "FULL");
+                sample.getContentTruncated().put("prompt", false);
+                if (sim.getTranscript() != null) {
+                    sample.getContents().put("completion", sim.getTranscript());
+                    sample.getContentCaptureModes().put("completion", "FULL");
+                    sample.getContentTruncated().put("completion", !simComplete);
+                }
+                // 对话预设评估器读 turns：把仿真轮次直接喂进样本契约 v2 的 turns 结构
+                sample.getTurns().clear();
+                sample.getTurns().addAll(sim.getTurns());
+                replayOutputForColumn = storeText(sim.getTranscript(), maxChars);
+            } else if (DatasetRunSnapshotService.MODE_REPLAY.equals(mode)) {
                 String input = sample.getInput();
                 if (input == null || input.isBlank()) {
                     recordFailure(item, EvaluatorEntity.LABEL_ERROR, "INPUT_MISSING",
@@ -411,6 +482,13 @@ public class DatasetRunWorker {
             details.put("calls", calls(generationCalls, judgeCalls));
             details.put("usage", usage(generationCalls, judgeCalls, generationPromptTokens,
                     generationCompletionTokens, judgePromptTokens, judgeCompletionTokens));
+            if (simulationPhases != null) {
+                Map<String, Object> phases = new LinkedHashMap<>(simulationPhases);
+                phases.put("judge", Map.of("calls", judgeCalls,
+                        "promptTokens", judgePromptTokens == null ? 0 : judgePromptTokens,
+                        "completionTokens", judgeCompletionTokens == null ? 0 : judgeCompletionTokens));
+                details.put("usagePhases", phases);
+            }
             if (EvaluatorEntity.LABEL_ERROR.equals(aggregateLabel)) {
                 details.put("errorCode", aggregateReasonCode);
                 details.put("error", truncate(aggregateReason, 5000));
