@@ -60,6 +60,7 @@ work_items:
       - emonlens-server/src/test/java/io/emonlens/server/PlaygroundMatrixFlowTest.java
       - emonlens-sdk-python/tests/test_ci.py
       - docs/EmonLens评测平台迭代方案.md
+      - docs/EmonLens迭代验收证据索引.md
 
   - id: r2-1-rules-v2
     title: 评估规则 v2（scope / filter / 回溯）
@@ -85,6 +86,7 @@ work_items:
       - emonlens-server/src/test/java/io/emonlens/server/EvaluationRuleFlowTest.java
       - emonlens-server/sql/migrations/2026-11-11-eval-rule-v2.sql
       - docs/EmonLens评测增强功能使用指南.md
+      - docs/EmonLens迭代验收证据索引.md
     depends_on: []
 
   - id: r2-2-feedback
@@ -107,6 +109,7 @@ work_items:
       - emonlens-server/src/test/java/io/emonlens/server/EndUserFeedbackFlowTest.java
       - emonlens-server/sql/migrations/2026-11-12-end-user-feedback.sql
       - docs/EmonLens评测增强功能使用指南.md
+      - docs/EmonLens迭代验收证据索引.md
     depends_on: []
 
   - id: r2-3-quality-board
@@ -128,6 +131,7 @@ work_items:
       - emonlens-server/src/test/java/io/emonlens/server/EvaluatorQualityFlowTest.java
       - emonlens-ui/src/views/trust/EvaluatorQualityView.vue
       - docs/EmonLens评测增强功能使用指南.md
+      - docs/EmonLens迭代验收证据索引.md
     depends_on: []
 
   - id: r2-4-compare
@@ -149,6 +153,7 @@ work_items:
       - emonlens-server/src/test/java/io/emonlens/server/ExperimentInsightFlowTest.java
       - emonlens-ui/src/views/trust/ExperimentLeaderboardView.vue
       - docs/EmonLens评测增强功能使用指南.md
+      - docs/EmonLens迭代验收证据索引.md
     depends_on: []
 
   - id: r3-1-conversation-sim
@@ -174,6 +179,7 @@ work_items:
       - emonlens-server/src/main/java/io/emonlens/server/engine/sim/ConversationSimulator.java
       - docs/EmonLens评测增强功能使用指南.md
     next_action: 进入 R3-3 Judge 升级（CoT 模板 + few-shot + 多 judge 聚合）。
+      - docs/EmonLens迭代验收证据索引.md
     depends_on: []
 
   - id: r3-3-judge-upgrade
@@ -195,6 +201,7 @@ work_items:
       - emonlens-server/src/main/java/io/emonlens/server/engine/eval/EvaluationRunService.java
       - docs/EmonLens评测增强功能使用指南.md
     next_action: 进入 R3-4 多模态（可延后）：先定附件存储与权限口径，再接 judge 证据字段
+      - docs/EmonLens迭代验收证据索引.md
     depends_on: []
 
   - id: r3-4-multimodal
@@ -214,6 +221,7 @@ work_items:
       - emonlens-server/src/main/java/io/emonlens/server/engine/eval/AttachmentPolicy.java
       - docs/EmonLens评测增强功能使用指南.md
     next_action: 收尾轮：定位真机 vision parts 未发送的根因，清理已知偏差，跑全量回归并补 AWR 验证报告
+      - docs/EmonLens迭代验收证据索引.md
     depends_on: []
 
   - id: r3-2-security-pack
@@ -235,4 +243,5 @@ work_items:
       - emonlens-server/src/test/java/io/emonlens/server/SecurityPackFlowTest.java
       - emonlens-server/src/main/java/io/emonlens/server/engine/security/SecurityPackRegistry.java
       - docs/EmonLens评测增强功能使用指南.md
+      - docs/EmonLens迭代验收证据索引.md
     depends_on: []

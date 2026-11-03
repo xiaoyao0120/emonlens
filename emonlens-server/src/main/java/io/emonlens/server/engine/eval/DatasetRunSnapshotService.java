@@ -170,7 +170,11 @@ public class DatasetRunSnapshotService {
             sample.put("groupKey", item.getGroupKey());
             sample.put("split", item.getSplit());
             sample.put("failureMode", item.getFailureMode());
-            sample.put("attachments", attachmentPolicy.parse(item.getAttachmentsJson()));
+            List<Map<String, Object>> frozenAttachments = attachmentPolicy.parse(item.getAttachmentsJson());
+            sample.put("attachments", frozenAttachments);
+            if (!frozenAttachments.isEmpty()) {
+                log.info("frozen sample carries {} attachment(s), item={}", frozenAttachments.size(), item.getId());
+            }
 
             if (MODE_TRACE.equals(mode)) {
                 freezeTraceItem(sample, item, dataset.getWorkspaceId());

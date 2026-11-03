@@ -284,8 +284,7 @@ class HttpLlmClientTest {
         server.start();
     }
 
-    private void writeJson(HttpExchange exchange, int status, String json) throws IOException {
-        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+    private void writeJson(HttpExchange exchange, int status, String json) throws IOException {        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(status, bytes.length);
         try (OutputStream out = exchange.getResponseBody()) {
