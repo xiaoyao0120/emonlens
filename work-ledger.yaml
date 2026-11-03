@@ -1,0 +1,138 @@
+# EmonLens 交付台账（由 AWR 接管后建立，人工可审阅、可编辑）
+#
+# 来源与依据：
+# - docs/EmonLens评测平台迭代方案.md（v1，2026-11-03）定义 R1/R2/R3 三个迭代窗口与验收标准
+# - 用户指示（2026-11-03）：在当前分支完成该计划
+# - 仓库现状：0.2.0 的 R1 四特性已实现，验收由后端集成测试与 SDK 测试覆盖
+#
+# 口径提醒：本项目把「结论」当一等对象——COMPLETED ≠ 通过，CI 只消费
+# decision=PASS 且 verification.usable=true 的 Gate。台账里的 status 只表达
+# 「源文件声明的状态」，完成声明仍需 AWR 的验证报告才能变成 verified_completed。
+
+goals:
+  - id: emonlens-eval-platform
+    title: 交付可验证的 EmonLens 评测平台迭代（0.2.0 至 0.4.0）
+    status: active
+    priority: P0
+    summary: >-
+      按 docs/EmonLens评测平台迭代方案.md 推进三个窗口：R1 评测开发者体验（0.2.0，已交付）、
+      R2 在线评估与反馈闭环（0.3.0）、R3 Agent 专项与安全（0.4.0）。每个窗口以 Gate、
+      任务账本与 Judge 盲审校准口径的验收证据为准，不以「跑完」代替「通过」。
+    success_criteria:
+      - R1 四特性全部落地，后端集成测试与 SDK 测试通过（0.2.0）
+      - R2 四特性落地，评估规则 v2 提供幂等迁移 SQL（0.3.0）
+      - R3 安全评测包与多轮会话仿真落地，security 维度有真实证据来源（0.4.0）
+      - 每个窗口结束可执行 make verify 与 make sdk-test
+
+milestones:
+  - id: r1-dx
+    title: R1 评测开发者体验（0.2.0）
+    status: completed
+    summary: SDK 自定义评测器、Playground 矩阵与 Diff、Prompt 版本与实验打通、GitHub Action 与 PR 评论。
+  - id: r2-online
+    title: R2 在线评估与反馈闭环（0.3.0）
+    status: in_progress
+    summary: 评估规则 v2（已交付）、端用户反馈采集、评估器质量看板、实验对比增强。
+  - id: r3-agent
+    title: R3 Agent 专项与安全（0.4.0）
+    status: ready
+    summary: 多轮会话仿真、安全评测包进 Gate、Judge 技术升级、多模态（可延后）。
+
+work_items:
+  - id: r1-improve-dx
+    title: 交付 0.2.0 评测 DX 四特性
+    status: completed
+    goal: emonlens-eval-platform
+    milestone: r1-dx
+    required: true
+    priority: P0
+    summary: >-
+      R1-1 SDK 评测器（push 模式）在本次接管前已实现；R1-2 矩阵与 Diff、R1-3 prompt 版本绑定、
+      R1-4 GitHub Action 与 PR 评论在本次迭代实现，版本号统一到 0.2.0。
+    acceptance:
+      - 矩阵跑完可导出网格 CSV，Diff 结论可追溯到逐样本偏好记录，单格失败不中断整批
+      - 从 prompt 版本可反查被哪些 run 评过与 Gate 结论；production 换版后旧 Gate 自动失效
+      - PR 评论幂等更新；Gate 非 PASS 时 Action 失败并列出检查项
+      - 含 SDK 评测器的 run 与矩阵相关后端集成测试全部通过
+    next_action: >-
+      用 AWR 的验证报告把已完成的验收固定为 verified_completed（当前只有源声明与测试文件作为参考证据）
+    evidence:
+      - emonlens-server/src/test/java/io/emonlens/server/PlaygroundMatrixFlowTest.java
+      - emonlens-sdk-python/tests/test_ci.py
+      - docs/EmonLens评测平台迭代方案.md
+
+  - id: r2-1-rules-v2
+    title: 评估规则 v2（scope / filter / 回溯）
+    status: completed
+    goal: emonlens-eval-platform
+    milestone: r2-online
+    required: true
+    priority: P0
+    summary: >-
+      全局采样升级为规则对象（scope=TRACE/SESSION、过滤条件、per-rule 采样率与小时预算、错误强制）。
+      命中账本 (rule_key, subject_id) 保证幂等与预算计数；一次 trace 完成里多规则按 priority 归并去重；
+      SESSION 按空闲阈值对多轮摘录评估一次并独立汇总；Rewind 按游标限速补评、可暂停/恢复/取消。
+      没有启用规则的工作空间仍走旧全局采样（向后兼容）。
+    acceptance:
+      - 同一 trace 命中多条规则时结果可归并去重
+      - Rewind 跑完的 trace 不重复评估
+      - SESSION 评估在报告中有独立汇总
+      - 未配置规则的工作空间行为不变（回退路径可用）
+    next_action: >-
+      补齐两处已知偏差：SPAN scope 的独立采样口径，以及 Evaluation Monitor 分母随 scope 调整；
+      之后进入 R2-2 端用户反馈采集。
+    evidence:
+      - emonlens-server/src/test/java/io/emonlens/server/EvaluationRuleFlowTest.java
+      - emonlens-server/sql/migrations/2026-11-11-eval-rule-v2.sql
+      - docs/EmonLens评测增强功能使用指南.md
+    depends_on: []
+
+  - id: r2-2-feedback
+    title: 端用户反馈采集（presigned token + score 类型学）
+    status: planned
+    goal: emonlens-eval-platform
+    milestone: r2-online
+    required: true
+    priority: P1
+    acceptance:
+      - token 泄露场景只能写分数不能读正文
+      - correction 类反馈进数据集时走样本契约校验
+    next_action: 设计反馈 token 的签发、限额、过期与限流，并复用既有 human score 体系
+    depends_on: []
+
+  - id: r2-3-quality-board
+    title: 评估器质量看板（校准一致率 / UNKNOWN 率 / 缓存与成本）
+    status: planned
+    goal: emonlens-eval-platform
+    milestone: r2-online
+    required: false
+    priority: P2
+    acceptance:
+      - 能回答哪个评估器最不可信、哪个数据集在腐烂
+    next_action: 汇总既有盲审一致率与任务账本指标，给出降级建议
+    depends_on: []
+
+  - id: r2-4-compare
+    title: 实验对比增强（散点、repetitions 方差、leaderboard）
+    status: planned
+    goal: emonlens-eval-platform
+    milestone: r2-online
+    required: false
+    priority: P2
+    acceptance:
+      - leaderboard 排序口径可解释，覆盖率不足的 run 显式降权
+    next_action: 复用 run diff 与成本报告，补 repetitions 与散点视图
+    depends_on: []
+
+  - id: r3-2-security-pack
+    title: 安全评测包接入 Gate（security 维度证据）
+    status: planned
+    goal: emonlens-eval-platform
+    milestone: r3-agent
+    required: true
+    priority: P1
+    acceptance:
+      - 一次 run 能同时输出功能 Gate 与 security 维度证据
+      - 红线违例即使整体通过率 100% 也判 BLOCKED
+    next_action: 扩展领域包机制，内置攻击类别种子集与检测口径，并加入 securityFail=0 红线
+    depends_on: []
