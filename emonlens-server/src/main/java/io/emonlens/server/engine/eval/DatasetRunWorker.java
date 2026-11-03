@@ -392,7 +392,8 @@ public class DatasetRunWorker {
                         result = evaluationRunService.evaluateSample(evaluator, sample);
                     }
                     String label = normalizeLabel(result.getLabel());
-                    int calls = Boolean.TRUE.equals(result.getJudgeCalled()) ? 1 : 0;
+                    int calls = Boolean.TRUE.equals(result.getJudgeCalled())
+                            ? Math.max(1, judgeCallCount(result)) : 0;
                     judgeCalls += calls;
                     judgePromptTokens = plus(judgePromptTokens, result.getPromptTokens());
                     judgeCompletionTokens = plus(judgeCompletionTokens, result.getCompletionTokens());
@@ -401,6 +402,11 @@ public class DatasetRunWorker {
                     resultMap.put("reasonCode", result.getReasonCode());
                     resultMap.put("reason", truncate(result.getReason() == null ? "" : result.getReason(), 5000));
                     resultMap.put("judgeModel", result.getJudgeModel());
+                    if (result.getJudgeRecordsJson() != null
+                            && !result.getJudgeRecordsJson().isEmpty()) {
+                        // R3-3：多 judge 的原始请求/响应留痕进任务账本
+                        resultMap.put("judgeRecords", parseJson(result.getJudgeRecordsJson()));
+                    }
                     if (result.getCriterionResultsJson() != null
                             && !result.getCriterionResultsJson().isEmpty()) {
                         resultMap.put("criteria", parseJson(result.getCriterionResultsJson()));
@@ -523,6 +529,16 @@ public class DatasetRunWorker {
         entry.put("reason", "等待 SDK 评测结果回写");
         entry.put("judgeCalled", false);
         return entry;
+    }
+
+    /** 单 judge 记 1 次；多 judge 按留痕条数记（三相成本里的 judge 才准）。 */
+    private int judgeCallCount(EvalResultEntity result) {
+        String json = result.getJudgeRecordsJson();
+        if (json == null || json.isBlank()) {
+            return 1;
+        }
+        Object parsed = parseJson(json);
+        return parsed instanceof List ? Math.max(1, ((List<?>) parsed).size()) : 1;
     }
 
     private void recordFailure(DatasetRunItemEntity item, String label, String reasonCode, String reason,

@@ -65,6 +65,10 @@ public class EvaluatorSpec {
 
     /** 覆盖全局 judge model */
     private String judgeModel;
+    /** R3-3：多 judge 模型（2-3 个）；为空时退化为单 judgeModel */
+    private List<String> judgeModels;
+    /** R3-3：聚合策略 MAJORITY（严格多数，否则 UNKNOWN）/ MEAN（均分）/ CONSERVATIVE（全一致，否则 UNKNOWN） */
+    private String judgeAggregation;
 
     /**
      * EXPRESSION / LLM_JUDGE：缺少参考或候选输出时返回 UNKNOWN，而不是 FAIL。

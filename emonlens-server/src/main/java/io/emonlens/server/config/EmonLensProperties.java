@@ -94,6 +94,10 @@ public class EmonLensProperties {
     public static class Eval {
         /** LLM Provider（OpenAI 兼容或 Anthropic Messages）；base-url 空 = LLM 不可用 */
         private Llm llm = new Llm();
+        /** R3-3：是否把盲审一致的校准结论注入 judge prompt（few-shot 校准提示） */
+        private boolean judgeFewShotEnabled = true;
+        /** R3-3：最多注入几条校准结论 */
+        private int judgeFewShotMax = 3;
 
     @Data
     public static class Llm {

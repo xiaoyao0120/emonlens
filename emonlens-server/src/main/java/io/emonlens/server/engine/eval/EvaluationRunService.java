@@ -106,6 +106,7 @@ public class EvaluationRunService {
     private final EvalResultMapper evalResultMapper;
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper;
+    private final io.emonlens.server.storage.mapper.JudgeReviewMapper judgeReviewMapper;
     private final EmonLensProperties properties;
     private final JudgeTemplateService judgeTemplateService;
     private final TrajectoryEvaluator trajectoryEvaluator;
@@ -319,6 +320,15 @@ public class EvaluationRunService {
         if (!instruction.isBlank()) {
             user += "\n\nPreset task:\n" + instruction;
         }
+        // R3-3：把盲审一致的校准结论注入 prompt（可开关）。它是"判定倾向"提示，不是原文 few-shot 片段。
+        String calibration = calibrationBlock(evaluator, spec);
+        if (!calibration.isBlank()) {
+            user += "\n\n" + calibration;
+        }
+        List<String> models = judgeModels(spec);
+        if (models.size() > 1) {
+            return runMultiJudge(evaluator, summary, spec, template, system, user, models);
+        }
         LlmClient.ChatReply reply = llmClient.chatWithUsage(system, user,
                 spec.getJudgeModel(), spec.getTemperature() == null ? 0.0 : spec.getTemperature());
         try {
@@ -367,6 +377,198 @@ public class EvaluationRunService {
             copyUsage(result, reply);
             return result;
         }
+    }
+
+    /** 判官原文留痕：序列化失败不该拖垮评估，退化成空数组。 */
+    private String recordsJson(List<Map<String, Object>> records) {
+        try {
+            return objectMapper.writeValueAsString(records);
+        } catch (Exception e) {
+            log.warn("judge records serialization failed", e);
+            return "[]";
+        }
+    }
+
+    /** 判官 token 累加（可能为 null，表示模型没回报 usage）。 */
+    private static Integer plus(Integer current, Integer delta) {
+        if (delta == null) {
+            return current;
+        }
+        return current == null ? delta : current + delta;
+    }
+
+    /** R3-3：判官名单——显式 judgeModels 优先，否则退回单 judgeModel。 */
+    private List<String> judgeModels(EvaluatorSpec spec) {
+        List<String> models = new ArrayList<>();
+        if (spec.getJudgeModels() != null) {
+            for (String model : spec.getJudgeModels()) {
+                if (model != null && !model.isBlank() && !models.contains(model.trim())) {
+                    models.add(model.trim());
+                }
+            }
+        }
+        if (models.isEmpty()) {
+            models.add(effectiveJudgeModel(spec));
+        }
+        return models;
+    }
+
+    /**
+     * R3-3：盲审一致的校准结论注入 prompt（可开关）。
+     *
+     * <p>已知偏差：评审记录只存标签与原因、不存样本原文，所以这里是"判定倾向"提示
+     * （该评估器在已一致的盲审样本上的 PASS/FAIL 分布），而不是原文 few-shot 片段。</p>
+     */
+    private String calibrationBlock(EvaluatorEntity evaluator, EvaluatorSpec spec) {
+        if (!properties.getEval().isJudgeFewShotEnabled()) {
+            return "";
+        }
+        int max = Math.max(0, properties.getEval().getJudgeFewShotMax());
+        if (max == 0) {
+            return "";
+        }
+        List<io.emonlens.server.storage.entity.JudgeReviewEntity> reviews =
+                judgeReviewMapper.selectList(Wrappers
+                        .<io.emonlens.server.storage.entity.JudgeReviewEntity>lambdaQuery()
+                        .eq(io.emonlens.server.storage.entity.JudgeReviewEntity::getWorkspaceId,
+                                evaluator.getWorkspaceId())
+                        .eq(io.emonlens.server.storage.entity.JudgeReviewEntity::getEvaluatorKey,
+                                evaluator.getEvaluatorKey())
+                        .apply("judge_label = human_label")
+                        .orderByDesc(io.emonlens.server.storage.entity.JudgeReviewEntity::getCreatedAt)
+                        .last("LIMIT " + max));
+        if (reviews.isEmpty()) {
+            return "";
+        }
+        long pass = reviews.stream()
+                .filter(r -> EvaluatorEntity.LABEL_PASS.equalsIgnoreCase(r.getJudgeLabel())).count();
+        long fail = reviews.size() - pass;
+        StringBuilder block = new StringBuilder();
+        block.append("Calibration from blind review (judge and human agreed on these, ")
+                .append(reviews.size()).append(" samples: ").append(pass).append(" PASS / ")
+                .append(fail).append(" FAIL):");
+        for (int i = 0; i < reviews.size(); i++) {
+            block.append("\n- example ").append(i + 1).append(": agreed label ")
+                    .append(reviews.get(i).getJudgeLabel());
+            if (reviews.get(i).getNote() != null && !reviews.get(i).getNote().isBlank()) {
+                block.append(" — ").append(clipReason(reviews.get(i).getNote()));
+            }
+        }
+        block.append("\nUse them only to calibrate strictness; the rubric still decides.");
+        return block.toString();
+    }
+
+    /**
+     * R3-3：多 judge 聚合。策略：
+     * <ul>
+     *   <li>MAJORITY（默认）：严格多数（&gt; n/2）才算结论，否则 UNKNOWN——冲突不硬判</li>
+     *   <li>CONSERVATIVE：全体一致才给结论，否则 UNKNOWN</li>
+     *   <li>MEAN：取均分并与 minScore 比；若标签本身分歧则 UNKNOWN（分数仍保留供排查）</li>
+     * </ul>
+     * 每个 model 的原始输出都写进 judgeRecordsJson，便于回溯"为什么判成这样"。
+     */
+    private EvalResultEntity runMultiJudge(EvaluatorEntity evaluator, TraceSummaryEntity summary,
+                                           EvaluatorSpec spec, JudgeTemplate template,
+                                           String system, String user, List<String> models) {
+        double temperature = spec.getTemperature() == null ? 0.0 : spec.getTemperature();
+        double minScore = spec.getMinScore() == null ? 6.0 : spec.getMinScore();
+        List<Map<String, Object>> records = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        List<BigDecimal> scores = new ArrayList<>();
+        List<String> summaryParts = new ArrayList<>();
+        Integer promptTokens = null;
+        Integer completionTokens = null;
+        boolean invalid = false;
+        for (String model : models) {
+            LlmClient.ChatReply reply = llmClient.chatWithUsage(system, user, model, temperature);
+            promptTokens = plus(promptTokens, reply.promptTokens());
+            completionTokens = plus(completionTokens, reply.completionTokens());
+            Map<String, Object> record = new LinkedHashMap<>();
+            record.put("model", model);
+            record.put("raw", clipReason(reply.content()));
+            try {
+                JsonNode node = objectMapper.readTree(extractJson(reply.content()));
+                JsonNode scoreNode = node.get("score");
+                if (scoreNode == null || !scoreNode.isNumber()) {
+                    invalid = true;
+                    record.put("label", EvaluatorEntity.LABEL_EVAL_UNAVAILABLE);
+                    records.add(record);
+                    continue;
+                }
+                double score = Math.max(0.0, Math.min(10.0, scoreNode.asDouble()));
+                boolean pass = score >= minScore;
+                String label = pass ? EvaluatorEntity.LABEL_PASS : EvaluatorEntity.LABEL_FAIL;
+                record.put("score", BigDecimal.valueOf(score).setScale(2, RoundingMode.HALF_UP));
+                record.put("label", label);
+                record.put("reason", node.path("reason").asText(""));
+                records.add(record);
+                labels.add(label);
+                scores.add(BigDecimal.valueOf(score));
+                summaryParts.add(model + "=" + label + "(" + BigDecimal.valueOf(score)
+                        .setScale(1, RoundingMode.HALF_UP) + ")");
+            } catch (Exception e) {
+                invalid = true;
+                record.put("label", EvaluatorEntity.LABEL_EVAL_UNAVAILABLE);
+                records.add(record);
+            }
+        }
+
+        EvalResultEntity result = base(evaluator, summary);
+        applyTemplateMetadata(result, effectiveJudgeMode(spec), spec, template);
+        result.setJudgeModel(String.join(",", models));
+        result.setPromptTokens(promptTokens);
+        result.setCompletionTokens(completionTokens);
+        result.setJudgeRecordsJson(recordsJson(records));
+        if (!scores.isEmpty()) {
+            BigDecimal total = scores.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+            result.setScore(total.divide(BigDecimal.valueOf(scores.size()), 2, RoundingMode.HALF_UP));
+        }
+
+        String policy = spec.getJudgeAggregation() == null ? "MAJORITY"
+                : spec.getJudgeAggregation().trim().toUpperCase();
+        long pass = labels.stream().filter(EvaluatorEntity.LABEL_PASS::equals).count();
+        long fail = labels.stream().filter(EvaluatorEntity.LABEL_FAIL::equals).count();
+        String label;
+        String reasonCode;
+        if (invalid || labels.isEmpty()) {
+            label = EvaluatorEntity.LABEL_EVAL_UNAVAILABLE;
+            reasonCode = "INVALID_JUDGE_OUTPUT";
+        } else if ("MEAN".equals(policy)) {
+            if (pass > 0 && fail > 0) {
+                label = EvaluatorEntity.LABEL_UNKNOWN;
+                reasonCode = "JUDGE_DISAGREEMENT";
+            } else {
+                label = pass > 0 ? EvaluatorEntity.LABEL_PASS : EvaluatorEntity.LABEL_FAIL;
+                reasonCode = pass > 0 ? "JUDGE_PASS" : "JUDGE_FAIL";
+            }
+        } else if ("CONSERVATIVE".equals(policy)) {
+            if (pass == labels.size()) {
+                label = EvaluatorEntity.LABEL_PASS;
+                reasonCode = "JUDGE_PASS";
+            } else if (fail == labels.size()) {
+                label = EvaluatorEntity.LABEL_FAIL;
+                reasonCode = "JUDGE_FAIL";
+            } else {
+                label = EvaluatorEntity.LABEL_UNKNOWN;
+                reasonCode = "JUDGE_DISAGREEMENT";
+            }
+        } else {
+            if (pass * 2 > labels.size()) {
+                label = EvaluatorEntity.LABEL_PASS;
+                reasonCode = "JUDGE_PASS";
+            } else if (fail * 2 > labels.size()) {
+                label = EvaluatorEntity.LABEL_FAIL;
+                reasonCode = "JUDGE_FAIL";
+            } else {
+                label = EvaluatorEntity.LABEL_UNKNOWN;
+                reasonCode = "JUDGE_DISAGREEMENT";
+            }
+        }
+        result.setLabel(label);
+        result.setReasonCode(reasonCode);
+        result.setReason(clipReason(String.join("; ", summaryParts) + " => " + label
+                + " by " + policy));
+        return result;
     }
 
     private EvalResultEntity unavailable(EvaluatorEntity evaluator, TraceSummaryEntity summary, String reason) {
@@ -638,7 +840,15 @@ public class EvaluationRunService {
         if (!instruction.isBlank()) {
             user.append("\n\nPreset task:\n").append(instruction);
         }
-
+        // R3-3：校准提示 + 多 judge（样本路径与 trace 路径保持同一套口径）
+        String calibration = calibrationBlock(evaluator, spec);
+        if (!calibration.isBlank()) {
+            user.append("\n\n").append(calibration);
+        }
+        List<String> models = judgeModels(spec);
+        if (models.size() > 1) {
+            return runMultiJudgeSample(evaluator, sample, spec, template, system, user.toString(), models);
+        }
         LlmClient.ChatReply reply;
         try {
             reply = llmClient.chatWithUsage(system, user.toString(),
@@ -1103,6 +1313,123 @@ public class EvaluationRunService {
         EvalResultEntity result = new EvalResultEntity();
         result.setAgentKey(sample.getAgentKey());
         result.setAgentVersion(sample.getAgentVersion());
+        return result;
+    }
+
+    /** 样本路径的多 judge 聚合：口径与 trace 路径一致（MAJORITY / CONSERVATIVE / MEAN）。 */
+    private EvalResultEntity runMultiJudgeSample(EvaluatorEntity evaluator, EvaluationSample sample,
+                                                 EvaluatorSpec spec, JudgeTemplate template,
+                                                 String system, String user, List<String> models) {
+        double temperature = spec.getTemperature() == null ? 0.0 : spec.getTemperature();
+        double minScore = spec.getMinScore() == null ? 6.0 : spec.getMinScore();
+        List<Map<String, Object>> records = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        List<BigDecimal> scores = new ArrayList<>();
+        List<String> summaryParts = new ArrayList<>();
+        Integer promptTokens = null;
+        Integer completionTokens = null;
+        boolean invalid = false;
+        boolean judgeCalled = true;
+        for (String model : models) {
+            LlmClient.ChatReply reply;
+            try {
+                reply = llmClient.chatWithUsage(system, user, model, temperature);
+            } catch (RunTokenBudgetStore.BudgetExceededException e) {
+                throw e;
+            } catch (LlmUnavailableException e) {
+                EvalResultEntity result = unknown(evaluator, sample, RC_JUDGE_UNAVAILABLE,
+                        "LLM unavailable: " + e.getMessage());
+                result.setJudgeCalled(!String.valueOf(e.getMessage()).contains("not configured"));
+                applyTemplateMetadata(result, effectiveJudgeMode(spec), spec, template);
+                return result;
+            }
+            promptTokens = plus(promptTokens, reply.promptTokens());
+            completionTokens = plus(completionTokens, reply.completionTokens());
+            Map<String, Object> record = new LinkedHashMap<>();
+            record.put("model", model);
+            record.put("raw", clipReason(reply.content()));
+            try {
+                JsonNode node = objectMapper.readTree(extractJson(reply.content()));
+                JsonNode scoreNode = node.get("score");
+                if (scoreNode == null || !scoreNode.isNumber()) {
+                    invalid = true;
+                    record.put("label", EvaluatorEntity.LABEL_EVAL_UNAVAILABLE);
+                    records.add(record);
+                    continue;
+                }
+                double score = Math.max(0.0, Math.min(10.0, scoreNode.asDouble()));
+                boolean pass = score >= minScore;
+                String label = pass ? EvaluatorEntity.LABEL_PASS : EvaluatorEntity.LABEL_FAIL;
+                record.put("score", BigDecimal.valueOf(score).setScale(2, RoundingMode.HALF_UP));
+                record.put("label", label);
+                record.put("reason", node.path("reason").asText(""));
+                records.add(record);
+                labels.add(label);
+                scores.add(BigDecimal.valueOf(score));
+                summaryParts.add(model + "=" + label + "(" + BigDecimal.valueOf(score)
+                        .setScale(1, RoundingMode.HALF_UP) + ")");
+            } catch (Exception e) {
+                invalid = true;
+                record.put("label", EvaluatorEntity.LABEL_EVAL_UNAVAILABLE);
+                records.add(record);
+            }
+        }
+
+        EvalResultEntity result = sampleBase(evaluator, sample);
+        result.setJudgeCalled(judgeCalled);
+        applyTemplateMetadata(result, effectiveJudgeMode(spec), spec, template);
+        result.setJudgeModel(String.join(",", models));
+        result.setPromptTokens(promptTokens);
+        result.setCompletionTokens(completionTokens);
+        result.setJudgeRecordsJson(recordsJson(records));
+        if (!scores.isEmpty()) {
+            BigDecimal total = scores.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+            result.setScore(total.divide(BigDecimal.valueOf(scores.size()), 2, RoundingMode.HALF_UP));
+        }
+        String policy = spec.getJudgeAggregation() == null ? "MAJORITY"
+                : spec.getJudgeAggregation().trim().toUpperCase();
+        long pass = labels.stream().filter(EvaluatorEntity.LABEL_PASS::equals).count();
+        long fail = labels.stream().filter(EvaluatorEntity.LABEL_FAIL::equals).count();
+        String label;
+        String reasonCode;
+        if (invalid || labels.isEmpty()) {
+            label = EvaluatorEntity.LABEL_EVAL_UNAVAILABLE;
+            reasonCode = RC_INVALID_JUDGE_OUTPUT;
+        } else if ("MEAN".equals(policy)) {
+            if (pass > 0 && fail > 0) {
+                label = EvaluatorEntity.LABEL_UNKNOWN;
+                reasonCode = "JUDGE_DISAGREEMENT";
+            } else {
+                label = pass > 0 ? EvaluatorEntity.LABEL_PASS : EvaluatorEntity.LABEL_FAIL;
+                reasonCode = pass > 0 ? "JUDGE_PASS" : "JUDGE_FAIL";
+            }
+        } else if ("CONSERVATIVE".equals(policy)) {
+            if (pass == labels.size()) {
+                label = EvaluatorEntity.LABEL_PASS;
+                reasonCode = "JUDGE_PASS";
+            } else if (fail == labels.size()) {
+                label = EvaluatorEntity.LABEL_FAIL;
+                reasonCode = "JUDGE_FAIL";
+            } else {
+                label = EvaluatorEntity.LABEL_UNKNOWN;
+                reasonCode = "JUDGE_DISAGREEMENT";
+            }
+        } else {
+            if (pass * 2 > labels.size()) {
+                label = EvaluatorEntity.LABEL_PASS;
+                reasonCode = "JUDGE_PASS";
+            } else if (fail * 2 > labels.size()) {
+                label = EvaluatorEntity.LABEL_FAIL;
+                reasonCode = "JUDGE_FAIL";
+            } else {
+                label = EvaluatorEntity.LABEL_UNKNOWN;
+                reasonCode = "JUDGE_DISAGREEMENT";
+            }
+        }
+        result.setLabel(label);
+        result.setReasonCode(reasonCode);
+        result.setReason(clipReason(String.join("; ", summaryParts) + " => " + label
+                + " by " + policy));
         return result;
     }
 

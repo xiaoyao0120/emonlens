@@ -1464,3 +1464,4 @@ CREATE INDEX IF NOT EXISTS idx_notify_created ON et_notify_record (created_at);
 CREATE INDEX IF NOT EXISTS idx_push_created ON et_push_record (created_at);
 CREATE INDEX IF NOT EXISTS idx_health_created ON et_dataset_health_snapshot (created_at);
 CREATE INDEX IF NOT EXISTS idx_event_delivery_created ON et_event_handler_delivery (created_at);
+ALTER TABLE et_eval_result ADD COLUMN IF NOT EXISTS judge_records_json TEXT;

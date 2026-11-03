@@ -1533,6 +1533,65 @@ curl -s "$HOST/api/v1/datasets/$DS/runs/$RUN/simulation" -H "Authorization: Bear
 - "目标达成"由模拟用户 LLM 自评，没有独立判定器——persona 提示词写得越具体，停止条件越可靠。
 - 仿真调用只计调用数，不参与 token 预算熔断。
 
+---
+
+## 21. Judge 升级：CoT / 校准 few-shot / 多 judge（R3-3）
+
+### 21.1 CoT 判分
+
+HOLISTIC 模板现在是「先列证据、再打分」：
+
+```
+Step 1: list 2-4 short evidence bullets quoting what the candidate actually did.
+Step 2: decide the score from those bullets, not from impression.
+Then output ONE JSON object: {"score": ..., "confidence": ..., "reason": ...}
+Prose before the JSON is allowed; the JSON object must be the last thing you write.
+```
+
+解析容忍"先说明后 JSON"（取首尾大括号）。模型若完全没给数字分，仍按 `EVAL_UNAVAILABLE` 处理并保留原文，
+不会兜底成 0 分 FAIL。
+
+### 21.2 校准 few-shot（可开关）
+
+```yaml
+emonlens:
+  eval:
+    judge-few-shot-enabled: true   # 关闭则完全不注入
+    judge-few-shot-max: 3          # 最多几条校准结论
+```
+
+- 取该 workspace + 评估器下 `judge_label = human_label` 的盲审一致样本，注入形如：
+  `Calibration from blind review (judge and human agreed on these, 3 samples: 2 PASS / 1 FAIL)`。
+- 边界：评审记录只存标签与备注、不存样本原文，所以这是**判定倾向校准提示**，不是原文片段 few-shot。
+- 想验证一致率不降：同一批样本在开关前后各跑一次（判定模型确定时两轮一致率应相同）。
+
+### 21.3 多 judge 与聚合策略
+
+```jsonc
+// 评估器 spec
+{
+  "type": "LLM_JUDGE",
+  "judgeMode": "HOLISTIC",
+  "judgeModels": ["gpt-4o-mini", "claude-3-haiku"],
+  "judgeAggregation": "MAJORITY",   // MAJORITY | CONSERVATIVE | MEAN
+  "rubric": "..."
+}
+```
+
+| 策略 | 何时给结论 | 冲突时 |
+| --- | --- | --- |
+| `MAJORITY`（默认） | 严格多数（> n/2） | 平票 → **UNKNOWN**（`JUDGE_DISAGREEMENT`） |
+| `CONSERVATIVE` | 全体一致 | 任何分歧 → UNKNOWN |
+| `MEAN` | 标签一致时按均分过阈值 | 标签分歧 → UNKNOWN（均分保留供排查） |
+
+留痕：任务账本的 `judgeRecords` 里每个 model 一条 `{model, label, score, raw, reason}`，
+`judgeModel` 记为 `"a,b"`，judge 调用数按模型数计——成本与"到底几个模型判过"都能对上。
+
+### 21.4 已知边界
+
+- 校准 few-shot 不是原文片段（见 21.2）。
+- MEAN 不做"分数硬切"：标签分歧就是 UNKNOWN，避免用均分掩盖分歧。
+
 
 
 

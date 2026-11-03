@@ -323,7 +323,7 @@ EmonLens 与竞品的能力分布是互补的：
     （该维度目前仍只看 SECURITY 类监控 Finding）；③ 红线固定为 0，模板声明 `securityFail>0` 属于放宽，按现有
     "政策只能更严"的规则不予支持。
 
-#### R3-3 Judge 技术升级
+#### R3-3 Judge 技术升级　✅ 已实现（CoT / 校准 few-shot / 多 judge 聚合与原文留痕）
 
 - **对标**：DeepEval G-Eval / few-shot；Phoenix 结构化判分（CLAIMS 已具备）。
 - **方案要点**：
@@ -331,6 +331,17 @@ EmonLens 与竞品的能力分布是互补的：
   - 多 judge 集成：单评估器可配 2–3 个 judge 模型 + 聚合策略（majority / mean / 保守），复用成对比较的多模型基建。
   - judge 原始请求 / 响应留痕进任务账本详情（补审计闭环）。
 - **验收标准**：few-shot 开启后同一批样本重跑一致率不降（回归守护）；多 judge 冲突时按策略出 UNKNOWN 而非硬判。
+- **实现落点**：
+  - `JudgeTemplateRegistry` 的 HOLISTIC 模板改为 CoT（先列 2-4 条证据要点，再给分；允许 JSON 前有说明文字），
+    解析侧沿用 `extractJson`（取首尾大括号），实测「证据要点 + JSON」能正常解析。
+  - `EvaluationRunService.calibrationBlock`：按 `workspace + evaluatorKey` 取 `judge_label = human_label` 的盲审一致样本
+    （最多 `judge-few-shot-max` 条），拼成校准块注入 prompt；`emonlens.eval.judge-few-shot-enabled` 可关。
+  - `EvaluatorSpec.judgeModels` + `judgeAggregation`：`MAJORITY`（严格多数，否则 UNKNOWN）、
+    `CONSERVATIVE`（全一致才给结论）、`MEAN`（均分；标签分歧则 UNKNOWN 但保留分数）。
+  - 三份原文留痕：`judgeRecordsJson`（每个 model 的 label/score/raw）→ 任务账本 `judgeRecords`；judge 调用数按模型数计。
+  - trace 路径与样本路径（`runLlmJudge` / `runLlmJudgeSample`）口径一致，避免"换个入口判定就变"。
+  - 已知偏差：① 校准 few-shot 是"判定倾向提示"（评审记录只有标签与备注、没有样本原文），不是原文片段；
+    ② MEAN 策略下若标签分歧仍判 UNKNOWN（分数保留仅供排查），不做连续分数硬切。
 
 #### R3-4 多模态评测（可延后）
 

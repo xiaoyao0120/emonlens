@@ -87,6 +87,8 @@ public class EvalResultEntity {
     /** CLAIMS：逐条 claim 结果 JSON */
     @TableField(exist = false)
     private String claimsJson;
+    /** R3-3：多 judge 的原始请求/响应留痕（每个 model 一条） */
+    private String judgeRecordsJson;
     /** CLAIMS：聚合结果 JSON（passCount/failCount/unknownCount/passRatio） */
     @TableField(exist = false)
     private String claimAggregateJson;

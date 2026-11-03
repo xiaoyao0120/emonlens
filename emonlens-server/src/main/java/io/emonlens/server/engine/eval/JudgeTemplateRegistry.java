@@ -22,11 +22,17 @@ public class JudgeTemplateRegistry {
     public static final String HOLISTIC_KEY = "platform/holistic-v1";
     public static final String CLAIM_KEY = "platform/claim-v1";
 
-    /** 保留现有 holistic 判分行为；{subject}/{criteria} 由运行时替换。 */
+    /**
+     * R3-3：先列证据再打分（CoT）。模型常把思考写在 JSON 前面，
+     * 解析侧用 EvaluationRunService#extractJson 取首尾大括号，容忍"先说明后 JSON"。
+     */
     private static final String HOLISTIC_SYSTEM =
-            "You are an evaluator. Score the {subject} against the rubric. "
-                    + "Respond ONLY with a JSON object: {\"score\": <0-10 number>, "
-                    + "\"confidence\": <0-1 number>, \"reason\": \"<short explanation>\"}{criteria}.";
+            "You are an evaluator. Score the {subject} against the rubric.\n"
+                    + "Step 1: list 2-4 short evidence bullets quoting what the candidate actually did.\n"
+                    + "Step 2: decide the score from those bullets, not from impression.\n"
+                    + "Then output ONE JSON object: {\"score\": <0-10 number>, "
+                    + "\"confidence\": <0-1 number>, \"reason\": \"<short explanation>\"}{criteria}.\n"
+                    + "Prose before the JSON is allowed; the JSON object must be the last thing you write.";
 
     private static final String CLAIM_SYSTEM =
             "You are a strict evidence-based evaluator. Extract atomic claims from the candidate output "
