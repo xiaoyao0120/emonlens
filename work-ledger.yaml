@@ -151,15 +151,72 @@ work_items:
       - docs/EmonLens评测增强功能使用指南.md
     depends_on: []
 
-  - id: r3-2-security-pack
-    title: 安全评测包接入 Gate（security 维度证据）
-    status: planned
+  - id: r3-1-conversation-sim
+    title: 多轮会话仿真（REPLAY_SIM，persona + 停止条件）
+    status: ready
     goal: emonlens-eval-platform
     milestone: r3-agent
     required: true
     priority: P1
+    summary: >-
+      新 run 模式 REPLAY_SIM：平台按 persona 与场景生成模拟用户轮次，被测 Agent 通过 HTTP 端点或 SDK runner
+      接入；复用样本契约 v2 的 turns 与对话类预设评估器；停止条件为最大轮数/目标达成/persona 满意度；
+      预算与缓存沿用，成本按 generation / simulation / judge 三相核算。
+    acceptance:
+      - 仿真会话完整入 trace 体系（可观测可回放）
+      - 成本核算分 generation / simulation / judge 三相
+    next_action: 先落 persona 与停止条件的 spec，再实现 REPLAY_SIM 轮次驱动与三相成本
+    depends_on: []
+
+  - id: r3-3-judge-upgrade
+    title: Judge 技术升级（CoT / few-shot 校准样本 / 多 judge 聚合）
+    status: planned
+    goal: emonlens-eval-platform
+    milestone: r3-agent
+    required: false
+    priority: P2
+    summary: >-
+      HOLISTIC 模板补 CoT（先列证据再打分）；从盲审校准一致样本里自动选 few-shot 示例注入 judge prompt；
+      单评估器可配 2–3 个 judge 模型与聚合策略（majority/mean/保守），冲突时按策略出 UNKNOWN 而非硬判；
+      judge 原始请求/响应留痕进任务账本。
+    acceptance:
+      - few-shot 开启后同一批样本重跑一致率不降（回归守护）
+      - 多 judge 冲突时按策略出 UNKNOWN 而非硬判
+    next_action: 先做 CoT 模板与 few-shot 注入（复用盲审一致样本），再做多 judge 聚合与原文留痕
+    depends_on: []
+
+  - id: r3-4-multimodal
+    title: 多模态评测（图片附件，可延后）
+    status: planned
+    goal: emonlens-eval-platform
+    milestone: r3-agent
+    required: false
+    priority: P3
+    summary: >-
+      样本契约 v2 增附件字段（image URL / base64，走对象存储与 TRACE_CONTENT 权限）；judge 模板证据字段支持图片
+      （端点需 vision 模型）；TRAJECTORY 不涉及。
+    acceptance:
+      - 附件生命周期与导出脱敏口径与正文一致
+    next_action: 视需求启动；先定附件存储与权限口径，再接 judge 证据字段
+    depends_on: []
+
+  - id: r3-2-security-pack
+    title: 安全评测包接入 Gate（security 维度证据）
+    status: completed
+    goal: emonlens-eval-platform
+    milestone: r3-agent
+    required: true
+    priority: P1
+    summary: >-
+      内置 7 类攻击种子（注入/越狱/PII/工具滥用/越权/不安全输出/跨租户泄漏）并按 OWASP LLM Top 10 映射；
+      种子导入按 sha256 幂等，样本按 security:<CATEGORY> 打标；run 的 security 证据按类别与 OWASP 汇总并单独给功能通过率；
+      Gate 新增 SECURITY_REDLINE：违例或证据不足直接 BLOCKED，且安全 BLOCKED 优先于普通 FAIL 聚合。
     acceptance:
       - 一次 run 能同时输出功能 Gate 与 security 维度证据
       - 红线违例即使整体通过率 100% 也判 BLOCKED
-    next_action: 扩展领域包机制，内置攻击类别种子集与检测口径，并加入 securityFail=0 红线
+    next_action: 进入 R3-1 多轮会话仿真（persona 驱动、停止条件、复用 push 通道；成本分 generation/simulation/judge）。
+    evidence:
+      - emonlens-server/src/test/java/io/emonlens/server/SecurityPackFlowTest.java
+      - emonlens-server/src/main/java/io/emonlens/server/engine/security/SecurityPackRegistry.java
+      - docs/EmonLens评测增强功能使用指南.md
     depends_on: []
