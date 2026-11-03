@@ -132,14 +132,23 @@ work_items:
 
   - id: r2-4-compare
     title: 实验对比增强（散点、repetitions 方差、leaderboard）
-    status: planned
+    status: completed
     goal: emonlens-eval-platform
     milestone: r2-online
     required: false
     priority: P2
+    summary: >-
+      散点按 run 给出 passRate/coverage/cost/priced/avgLatency 并可按模型与覆盖率过滤；repetitions 以候选指纹
+      分组（复跑沿用冻结配置与指纹），报告均值/样本方差/标准差；leaderboard 用
+      adjustedPassRate = 平均通过率 × 平均覆盖率 排序，覆盖率不足显式 degraded 并写明原因与 rankingRule；
+      成对比较要求两组重复次数一致，否则 400。
     acceptance:
       - leaderboard 排序口径可解释，覆盖率不足的 run 显式降权
-    next_action: 复用 run diff 与成本报告，补 repetitions 与散点视图
+    next_action: 进入 R3-2 安全评测包（领域包扩展攻击种子集 + securityFail=0 红线）。
+    evidence:
+      - emonlens-server/src/test/java/io/emonlens/server/ExperimentInsightFlowTest.java
+      - emonlens-ui/src/views/trust/ExperimentLeaderboardView.vue
+      - docs/EmonLens评测增强功能使用指南.md
     depends_on: []
 
   - id: r3-2-security-pack
