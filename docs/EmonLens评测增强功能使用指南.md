@@ -1335,6 +1335,61 @@ curl -s -X POST "$HOST/api/v1/evaluator-quality/scan" -H "Authorization: Bearer 
 | `emonlens.evaluator-quality.warn-revision-days` | 14 | revision 超期判 WARNING |
 | `emonlens.evaluator-quality.cron` | `0 10 3 * * *` | 每日扫描时间 |
 
+---
+
+## 18. 实验对比增强：散点 / repetitions / leaderboard（R2-4）
+
+入口：评测 →「实验排行」（`/experiment-leaderboard`）。三件事：看**成本 × 通过率**的散点、同一配置**重复跑**的方差、按候选排的 **leaderboard**。
+
+### 18.1 散点
+
+```bash
+curl -s "$HOST/api/v1/datasets/$DS/runs/scatter?windowDays=30&minCoverage=90&model=gpt-4o" \
+  -H "Authorization: Bearer $JWT"
+```
+
+返回 `points[]`：`passRate`、`coverage`、`cost`、`priced`、`avgLatencyMs`、`repetitionGroup`、`startedAt`；
+`filteredOut` 是被 `minCoverage` / `model` / `candidateLabel` 过滤掉的 run 数。
+延迟取任务账本里记录的 `latencyMs`（没有记录就是 `null`，不猜）；缺模型价目时 `cost=null, priced=false`。
+
+### 18.2 repetitions：同配置重跑，估方差
+
+```bash
+# 以某个已完成 run 的冻结配置再跑一次（新 run 与源 run 候选指纹相同 → 自动同组）
+curl -s -X POST "$HOST/api/v1/datasets/$DS/runs/$RUN/repetition" \
+  -H "Authorization: Bearer $JWT" -H "Idempotency-Key: rep-$RUN-2"
+# → {"runId":"...","repetitionCount":2,...}
+```
+
+- 复用 `accept()` 的受理链路：冻结配置、候选指纹、容量与幂等全部沿用，所以**同指纹即同组**。
+- 每次只创建一条（受活动 run 容量约束，默认同时 1 条）；要凑 N 次就等上一次结束后再调用。
+- leaderboard 里会给出 `runs`（重复次数）、`passRateMean`、`passRateStdDev`、`passRateVariance`（样本方差）。
+- **成对比较要求同口径**：两个 run 所在组重复次数不同时，`POST /pairwise-evaluations` 返回 400
+  （「3 次均值 vs 1 次单跑」不是可比结论）。
+
+### 18.3 leaderboard 的排序口径（可解释）
+
+```bash
+curl -s "$HOST/api/v1/datasets/$DS/leaderboard?windowDays=30&minCoverage=90" \
+  -H "Authorization: Bearer $JWT"
+```
+
+```
+adjustedPassRate = passRateMean × coverageMean / 100
+排序：adjustedPassRate 降序 → coverageMean 降序 → 候选名
+coverageMean < minCoverage → degraded=true（显式降权，并在 degradeReason 写明原因）
+```
+
+例：候选 B 通过率 100% 但只判了 60% 样本 → 加权 60，排在「通过率 100% 且覆盖 100%」的候选之后，
+不会因为「跑了 1 条就 100%」排第一。响应里的 `rankingRule` 字段直接给出这段规则，便于 CI 与页面解释。
+
+### 18.4 数据来源与边界
+
+- 排行榜**只读**已收口 run 的结论列（`pass_count / fail_count / unknown_count / item_count`），
+  不改写任何 run 或 Gate；重复（repetition）会照常产生新的 run 与 Gate 证据。
+- 窗口默认 30 天，单次最多取 50 个 run（避免一次把大账单全算一遍）。
+- 散点为自绘 SVG：横轴成本、纵轴通过率、点面积按样本数；缺价目的点用警示色区分。
+
 
 
 

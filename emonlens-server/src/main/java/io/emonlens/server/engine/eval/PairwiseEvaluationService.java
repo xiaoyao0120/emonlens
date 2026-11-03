@@ -62,6 +62,7 @@ public class PairwiseEvaluationService {
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
+    private final DatasetRunService datasetRunService;
 
     public Map<String, Object> evaluate(String workspaceId, String datasetId, CreateRequest request) {
         DatasetEntity dataset = datasetMapper.selectById(datasetId);
@@ -88,6 +89,14 @@ public class PairwiseEvaluationService {
         if (sampleSetA == null || !sampleSetA.equals(sampleSetB)) {
             throw new EmonLensException(ErrorCode.BAD_REQUEST,
                     "两个 run 的 sampleSetHash 不一致，不能直接成对比较");
+        }
+        // R2-4：repetitions 口径必须一致——一边跑了 3 次取均值、另一边只跑 1 次，比较结论不成立。
+        int repeatsA = datasetRunService.repetitionCount(workspaceId, datasetId, runA);
+        int repeatsB = datasetRunService.repetitionCount(workspaceId, datasetId, runB);
+        if (repeatsA != repeatsB) {
+            throw new EmonLensException(ErrorCode.BAD_REQUEST,
+                    "两个 run 的 repetitions 次数不同（" + repeatsA + " vs " + repeatsB
+                            + "）：成对比较要求同口径，请用相同重复次数重跑后再比较");
         }
 
         int samples = request.getSamplesPerDirection() == null ? 1 : request.getSamplesPerDirection();

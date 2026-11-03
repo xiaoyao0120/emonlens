@@ -28,6 +28,7 @@ const routes = [
       { path: 'matrix', name: 'matrix', component: () => import('@/views/trust/MatrixView.vue'), meta: { title: '矩阵实验', group: 'workbench', perm: 'workspace:trust:prompt:query' } },
       { path: 'prompts', name: 'prompts', component: () => import('@/views/trust/PromptView.vue'), meta: { title: '提示词', group: 'workbench', perm: 'workspace:trust:prompt:query' } },
       { path: 'datasets', name: 'datasets', component: () => import('@/views/trust/DatasetView.vue'), meta: { title: '数据集', group: 'assets', perm: 'workspace:trust:dataset:query' } },
+      { path: 'experiment-leaderboard', name: 'experiment-leaderboard', component: () => import('@/views/trust/ExperimentLeaderboardView.vue'), meta: { title: '实验排行', perm: 'workspace:trust:evaluation:query' } },
       { path: 'datasets/:id', name: 'dataset-detail', component: () => import('@/views/trust/DatasetDetailView.vue'), meta: { title: '数据集详情', perm: 'workspace:trust:dataset:query' } },
       { path: 'datasets/:id/runs/:runId', name: 'dataset-run-detail', component: () => import('@/views/trust/DatasetDetailView.vue'), meta: { title: '运行报告', perm: 'workspace:trust:dataset:query' } },
       { path: 'business-experiments', name: 'business-experiments', component: () => import('@/views/trust/BusinessExperimentView.vue'), meta: { title: '业务实验', perm: 'workspace:trust:evaluation:query' } },

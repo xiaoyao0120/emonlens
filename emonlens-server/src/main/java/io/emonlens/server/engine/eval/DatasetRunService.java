@@ -1869,8 +1869,76 @@ public class DatasetRunService {
         return result;
     }
 
-    /** 按标签取该数据集最近一条 run（CI 基线解析）；没有返回 null。 */
-    public DatasetRunEntity latestByLabel(String workspaceId, String datasetId, String runLabel) {
+    /**
+     * repetitions（R2-4）：按同一个已完成 run 的冻结配置再跑一次，用于估计方差。
+     *
+     * <p>复用 {@link #accept} 的受理链路（冻结、指纹、容量、幂等），因此新 run 的
+     * candidateFingerprint 与源 run 一致——靠指纹就能把同一配置的多次重复聚成一组。
+     * 每次只创建一条并受活动 run 容量约束（默认单实例 1 条），需要 N 次就按顺序重复调用。</p>
+     */
+    public DatasetRunEntity repeatFromRun(String workspaceId, String datasetId, String runId,
+                                          String requestKey) {
+        DatasetRunEntity source = requireRun(workspaceId, datasetId, runId);
+        if (!DatasetRunEntity.STATUS_COMPLETED.equals(source.getStatus())) {
+            throw new EmonLensException(ErrorCode.BAD_REQUEST,
+                    "只有 COMPLETED run 可以复跑：未完成或失败的重复会污染方差");
+        }
+        Map<String, Object> config = parseMap(source.getConfigSnapshotJson());
+        if (config == null || config.isEmpty()) {
+            throw new EmonLensException(ErrorCode.BAD_REQUEST, "历史 run 没有冻结配置，无法复跑");
+        }
+        Map<?, ?> revision = asMap(config.get("datasetRevision"));
+        String revisionId = revision == null ? null : stringValue(revision.get("id"), null);
+        List<String> evaluatorIds = new ArrayList<>();
+        if (config.get("evaluators") instanceof List) {
+            for (Object raw : (List<?>) config.get("evaluators")) {
+                if (raw instanceof Map && ((Map<?, ?>) raw).get("id") != null) {
+                    evaluatorIds.add(String.valueOf(((Map<?, ?>) raw).get("id")));
+                }
+            }
+        }
+        Map<?, ?> generation = asMap(config.get("generation"));
+        Map<?, ?> budget = asMap(config.get("budget"));
+        Map<?, ?> promptRefMap = asMap(config.get("promptRef"));
+        io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef = null;
+        if (promptRefMap != null && promptRefMap.get("name") != null) {
+            promptRef = new io.emonlens.server.engine.prompt.PromptService.PromptRef(
+                    String.valueOf(promptRefMap.get("name")),
+                    promptRefMap.get("version") instanceof Number
+                            ? ((Number) promptRefMap.get("version")).intValue() : null,
+                    promptRefMap.get("label") == null ? null : String.valueOf(promptRefMap.get("label")),
+                    null);
+        }
+        AcceptResult result = accept(workspaceId, datasetId, evaluatorIds, revisionId,
+                stringValue(config.get("runMode"), "TRACE"),
+                generation == null ? null : stringValue(generation.get("systemPrompt"), null),
+                generation == null ? null : stringValue(generation.get("model"), null),
+                source.getCandidateLabel(), null,
+                budget == null || !(budget.get("maxExternalCalls") instanceof Number) ? null
+                        : ((Number) budget.get("maxExternalCalls")).intValue(),
+                budget == null || !(budget.get("maxTokens") instanceof Number) ? null
+                        : ((Number) budget.get("maxTokens")).longValue(),
+                stringValue(config.get("reviewMode"), null), source.getSuiteId(),
+                requestKey, null, promptRef, null, null);
+        log.info("dataset run repeated from {}, new run={}", runId, result.getRun().getId());
+        return result.getRun();
+    }
+
+    /** 同一数据集内与给定 run 拥有相同候选指纹的 run 数量（repetitions 组大小，含自己）。 */
+    public int repetitionCount(String workspaceId, String datasetId, DatasetRunEntity run) {
+        if (run.getCandidateFingerprint() == null || run.getCandidateFingerprint().isBlank()) {
+            return 1;
+        }
+        Long count = datasetRunMapper.selectCount(Wrappers.<DatasetRunEntity>lambdaQuery()
+                .eq(DatasetRunEntity::getWorkspaceId, workspaceId)
+                .eq(DatasetRunEntity::getDatasetId, datasetId)
+                .eq(DatasetRunEntity::getCandidateFingerprint, run.getCandidateFingerprint())
+                .in(DatasetRunEntity::getStatus, DatasetRunEntity.STATUS_COMPLETED,
+                        DatasetRunEntity.STATUS_PARTIAL_FAILED, DatasetRunEntity.STATUS_FAILED));
+        return count == null || count == 0 ? 1 : count.intValue();
+    }
+
+    /** 按标签取该数据集最近一条 run（CI 基线解析）；没有返回 null。 */    public DatasetRunEntity latestByLabel(String workspaceId, String datasetId, String runLabel) {
         if (runLabel == null || runLabel.isBlank()) {
             return null;
         }

@@ -217,6 +217,11 @@ export default {
   closeQualityCase: (id) => client.post(`/quality-cases/${id}/close`, {}),
   updateDatasetBlueprint: (id, body) => client.put(`/datasets/${id}/blueprint`, body),
   datasetRevisions: (id) => client.get(`/datasets/${id}/revisions`),
+  // R2-4：实验对比增强（散点 / leaderboard / repetitions）
+  datasetScatter: (id, params) => client.get(`/datasets/${id}/runs/scatter`, params),
+  datasetLeaderboard: (id, params) => client.get(`/datasets/${id}/leaderboard`, params),
+  repeatDatasetRun: (id, runId, idempotencyKey) => client.post(
+    `/datasets/${id}/runs/${runId}/repetition`, null, { headers: { 'Idempotency-Key': idempotencyKey } }),
   freezeDatasetRevision: (id, body) => client.post(`/datasets/${id}/revisions`, body || {}),
   createQualityGate: (body) => client.post('/quality-gates', body),
   qualityGate: (id) => client.get(`/quality-gates/${id}`),

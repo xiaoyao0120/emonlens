@@ -250,11 +250,27 @@ EmonLens 与竞品的能力分布是互补的：
   - 已知偏差：① 缓存指标按工作空间汇总（缓存 key 绑定 sample 指纹与模板 hash，不绑定 evaluator key），
     没有拆到单个评估器；② 数据集「蓝图覆盖」只标注是否配置，未做类别级缺口对账（那部分仍在数据集健康页）。
 
-#### R2-4 实验对比增强
+#### R2-4 实验对比增强　✅ 已实现（散点 / repetitions 方差 / leaderboard 覆盖率降权）
 
 - **对标**：Weave Leaderboard；Phoenix repetitions。
 - **方案要点**：run 列表支持分数 vs 成本 / 延迟散点与筛选；run 支持 repetitions（同配置重跑 N 次，报告均值与方差，成对比较要求同 repetitions 口径）；数据集维度 leaderboard（模型 × 套件通过率矩阵）。
 - **验收标准**：leaderboard 排序口径可解释（覆盖率不足的 run 显式降权 / 标灰）。
+- **实现落点**：`ExperimentInsightService` + `ExperimentInsightController`
+  （`GET /datasets/{id}/runs/scatter`、`GET /datasets/{id}/leaderboard`、
+  `POST /datasets/{id}/runs/{runId}/repetition`）+ `DatasetRunService.repeatFromRun` + UI「实验排行」页。
+  - **散点**：一行一个 run，含 `passRate / coverage / cost / priced / avgLatencyMs / repetitionGroup`，
+    可按 `model`、`candidateLabel`、`minCoverage` 过滤；延迟取任务账本记录的 `latencyMs`，
+    缺价目时 `cost=null, priced=false`（不伪造金额）。
+  - **repetitions**：以候选指纹分组——复跑复用 `accept()` 的冻结与指纹派生，因此同配置的多次 run
+    天然同组；报告均值、样本方差与标准差（样本方差，因为重复是抽样）。
+  - **leaderboard 口径**：`adjustedPassRate = passRateMean × coverageMean / 100`，
+    按它降序、同分按覆盖率降序；`coverageMean < minCoverage` 的候选标 `degraded=true` 并给出原因。
+    响应里带 `rankingRule` 文本，前端与 CI 都能解释排序。覆盖率为 0 的候选加权为 0——
+    「只判了 1 条拿 100%」不会排第一。
+  - **repetitions 口径一致性**：成对比较要求两个 run 所在组的重复次数相同，否则 400
+    并提示用相同重复次数重跑（避免「3 次均值 vs 1 次」的假比较）。
+  - 已知偏差：复跑一次只创建一条 run（受活动 run 容量约束），凑 N 次需按顺序调用；
+    散点在 UI 里是自绘 SVG（无图表库），只支持成本为横轴。
 
 ### R3（0.4.0）：Agent 专项与安全
 
