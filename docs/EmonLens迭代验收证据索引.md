@@ -50,8 +50,9 @@ mvn -B -o test     # 322 用例
 
 ## 仍未闭合的偏差（按影响排序）
 
-1. **R3-4 真机 vision part 未发送**：集成测试证明 `chatWithImages` 收到 URL、`HttpLlmClientTest` 证明请求体带
-   `image_url`；打包实例里假端点只看到文本。下一步：在打包实例打点 `runLlmJudgeSample` 的 `sample.getAttachments()`。
+1. **R3-4 真机 vision part 未发送 —— 已修复**：根因是 `HttpLlmClient.chatWithImages` 覆写在一次文件重写中
+   意外丢失，接口默认实现静默退化为纯文本（编译无信号）。修复后 `javap` 验证 boot jar 字节码 +
+   真机 E2E 实测 `reason: vision parts=1`（run PASS）。
 2. **R2-1 SPAN scope 复用 TRACE 语义**；Evaluation Monitor 分母未随 scope 调整。
 3. **R2-2** 分类标签为内置词表；token 限流是单实例内存计数。
 4. **R2-3** 缓存指标按工作空间汇总未拆到评估器；蓝图覆盖只标注是否配置。

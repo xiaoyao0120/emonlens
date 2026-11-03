@@ -81,6 +81,18 @@ public class HttpLlmClient implements LlmClient {
         return doChat(null, systemPrompt, userPrompt, null, model, temperature);
     }
 
+    /**
+     * R3-4：带图片外链的评审调用。vision 端点把图片作为 content parts 收；
+     * 这一步必须真的覆写接口默认方法，否则默认实现会退化成纯文本（真机曾因此丢图）。
+     */
+    @Override
+    public ChatReply chatWithImages(String systemPrompt, String userPrompt,
+                                    java.util.List<String> imageUrls, String model, double temperature)
+            throws LlmUnavailableException {
+        return doChat(null, systemPrompt, userPrompt,
+                imageUrls == null || imageUrls.isEmpty() ? null : imageUrls, model, temperature);
+    }
+
     /** override 非空且配置了 base-url 时完全按 override 执行（连通性测试未保存的表单值）。 */
     public ChatReply chat(SysSettingService.EvalLlm override, String systemPrompt, String userPrompt,
                           String model, double temperature) throws LlmUnavailableException {

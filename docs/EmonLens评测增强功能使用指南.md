@@ -1628,10 +1628,12 @@ curl -s -X POST "$HOST/api/v1/datasets/$DS/items" \
 - 外链图片同时以 `image_url`（OpenAI）或 `image`（Anthropic）content part 发给模型——
   **端点需要 vision 模型**，否则模型只会看到文字说明；
 - base64 附件只给长度、不内联（避免 prompt 膨胀）——已知偏差，需要看图请改用 URL。
-- 真机验证状态：附件持久化、revision 冻结、导出脱敏与校验均已实测通过；但打包后的实例里
-  vision content part 未在假端点侧观察到（`reason: vision parts=0`），集成测试用 fake LlmClient 验证的是
-  `chatWithImages` 被调用且带上 URL。这条排查已记为 open loop（下一步：在打包实例里抓
-  HttpLlmClient 的实际请求体）。
+- 真机验证状态：附件持久化、revision 冻结、导出脱敏与校验均已实测通过。
+- **已修复的真机问题**：最初打包实例里假端点只收到文本（`vision parts=0`）。根因是 `HttpLlmClient`
+  的 `chatWithImages` 覆写在一次文件重写中意外丢失——接口默认实现静默退化为纯文本，编译不报错、
+  测试曾短暂通过，极易漏检。修复后用 `javap` 验证 boot jar 字节码 + 真机 E2E 双重确认
+  （`reason: vision parts=1`）。教训：**接口默认方法的"覆写缺失"不会产生任何编译/测试信号**，
+  对这类降级路径要直接断言字节码或端到端行为。
 
 ### 22.3 生命周期与导出脱敏
 
