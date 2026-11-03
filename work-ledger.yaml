@@ -111,14 +111,23 @@ work_items:
 
   - id: r2-3-quality-board
     title: 评估器质量看板（校准一致率 / UNKNOWN 率 / 缓存与成本）
-    status: planned
+    status: completed
     goal: emonlens-eval-platform
     milestone: r2-online
     required: false
     priority: P2
+    summary: >-
+      一次报告回答两问：leastTrusted 评估器（LOW_TRUST / NOISY / COSTLY 判定 + 可解释建议），
+      与数据集腐烂（陈旧样本占比 + revision 年龄 → ROTTING / WARNING）。盲审一致率、UNKNOWN/未执行率、
+      成本（缺价目 priced=false）、缓存汇总都可查；扫描把结论写成 EVALUATOR_QUALITY / DATASET_ROT Finding
+      接入 Alerts，24 小时内同一对象只报一次。
     acceptance:
       - 能回答哪个评估器最不可信、哪个数据集在腐烂
-    next_action: 汇总既有盲审一致率与任务账本指标，给出降级建议
+    next_action: 进入 R2-4 实验对比增强（散点、repetitions 方差、leaderboard 降权）。
+    evidence:
+      - emonlens-server/src/test/java/io/emonlens/server/EvaluatorQualityFlowTest.java
+      - emonlens-ui/src/views/trust/EvaluatorQualityView.vue
+      - docs/EmonLens评测增强功能使用指南.md
     depends_on: []
 
   - id: r2-4-compare
