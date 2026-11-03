@@ -199,7 +199,7 @@ work_items:
 
   - id: r3-4-multimodal
     title: 多模态评测（图片附件，可延后）
-    status: planned
+    status: completed
     goal: emonlens-eval-platform
     milestone: r3-agent
     required: false
@@ -209,7 +209,11 @@ work_items:
       （端点需 vision 模型）；TRAJECTORY 不涉及。
     acceptance:
       - 附件生命周期与导出脱敏口径与正文一致
-    next_action: 视需求启动；先定附件存储与权限口径，再接 judge 证据字段
+    evidence:
+      - emonlens-server/src/test/java/io/emonlens/server/MultimodalFlowTest.java
+      - emonlens-server/src/main/java/io/emonlens/server/engine/eval/AttachmentPolicy.java
+      - docs/EmonLens评测增强功能使用指南.md
+    next_action: 收尾轮：定位真机 vision parts 未发送的根因，清理已知偏差，跑全量回归并补 AWR 验证报告
     depends_on: []
 
   - id: r3-2-security-pack
