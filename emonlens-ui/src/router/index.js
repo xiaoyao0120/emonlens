@@ -16,6 +16,7 @@ const routes = [
       { path: 'alerts', name: 'alerts', component: () => import('@/views/trust/AlertsView.vue'), meta: { title: '事件告警', perm: 'workspace:trust:incident:query' } },
       { path: 'quality', name: 'quality', component: () => import('@/views/trust/QualityOverviewView.vue'), meta: { title: '质量总览', perm: 'workspace:trust:overview:query' } },
       { path: 'evaluators', name: 'evaluators', component: () => import('@/views/trust/EvaluatorView.vue'), meta: { title: '评估器', perm: 'workspace:trust:evaluator:query' } },
+      { path: 'evaluator-quality', name: 'evaluator-quality', component: () => import('@/views/trust/EvaluatorQualityView.vue'), meta: { title: '评估器质量', perm: 'workspace:trust:evaluation:query' } },
       { path: 'evaluations', name: 'evaluations', component: () => import('@/views/trust/EvaluationView.vue'), meta: { title: '评估结果', perm: 'workspace:trust:evaluation:query' } },
       { path: 'sessions', redirect: { path: '/traces', query: { tab: 'sessions' } } },
       { path: 'sessions/:sessionId', name: 'session-detail', component: () => import('@/views/trust/SessionDetailView.vue'), meta: { title: '会话详情', perm: 'workspace:trust:trace:query' } },

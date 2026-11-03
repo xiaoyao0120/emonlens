@@ -52,6 +52,9 @@ export default {
   disableEvaluator: (id) => client.post(`/evaluators/${id}/disable`),
   deleteEvaluator: (id) => client.delete(`/evaluators/${id}`),
   evalResults: (query) => client.get('/eval-results', query),
+  // R2-3：评估器质量看板（一致率 / UNKNOWN 率 / 成本 / 数据集腐烂）
+  evaluatorQuality: (params) => client.get('/evaluator-quality', params),
+  scanEvaluatorQuality: () => client.post('/evaluator-quality/scan', {}),
   evalStats: (query) => client.get('/eval-results/stats', query),
   evalOverview: () => client.get('/eval-results/overview'),
   runEvaluation: (body) => client.post('/evaluations/run', body),

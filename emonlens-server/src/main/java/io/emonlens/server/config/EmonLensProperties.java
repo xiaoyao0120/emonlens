@@ -26,6 +26,7 @@ public class EmonLensProperties {
     private DatasetSynthesis datasetSynthesis = new DatasetSynthesis();
     private Playground playground = new Playground();
     private Feedback feedback = new Feedback();
+    private EvaluatorQuality evaluatorQuality = new EvaluatorQuality();
     private Metric metric = new Metric();
     private Push push = new Push();
     private Score score = new Score();
@@ -189,6 +190,29 @@ public class EmonLensProperties {
         private int maxCalls = 1000;
         private long pollIntervalMs = 1000;
         private int workerThreads = 1;
+    }
+
+    /** 评估器质量看板（R2-3）：判定阈值与扫描节奏。 */
+    @Data
+    public static class EvaluatorQuality {
+        /** 默认统计窗口（小时） */
+        private int windowHours = 168;
+        /** 样本「陈旧」的判定天数 */
+        private int staleDays = 90;
+        /** 低于该一致率判 LOW_TRUST（与 Gate 的 80% 同口径） */
+        private double minAgreement = 80.0;
+        /** UNKNOWN + 未执行占比达到该值判 NOISY */
+        private double unknownAlertRate = 0.2;
+        /** 窗口内成本超过该值判 COSTLY */
+        private double costlyPerWindow = 5.0;
+        /** 低于该盲审条数时一致率不作为定论（只给补样本建议） */
+        private int minReviewedForTrust = 10;
+        /** 数据集最新 revision 超过该天数判 ROTTING */
+        private int rotRevisionDays = 30;
+        /** 超过该天数判 WARNING */
+        private int warnRevisionDays = 14;
+        /** 每日扫描：把低可信评估器与腐烂数据集写成 Finding */
+        private String cron = "0 10 3 * * *";
     }
 
     /** 端用户反馈（R2-2）：预签 token 的配额、过期、限流，以及负反馈触发 Finding 的阈值。 */

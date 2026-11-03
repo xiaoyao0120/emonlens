@@ -1271,6 +1271,71 @@ curl -s -X POST "$HOST/api/v1/traces/$TRACE_ID/feedback/$FEEDBACK_ID/dataset" \
 | `emonlens.feedback.finding-window-hours` | 24 | 阈值统计窗口 |
 | `emonlens.feedback.finding-severity` | MEDIUM | Finding 严重级 |
 
+---
+
+## 17. 评估器质量看板（R2-3）
+
+入口：评测 →「评估器质量」（`/evaluator-quality`）。一次报告同时回答两件事：**哪个评估器最不可信**、**哪个数据集在腐烂**。
+
+### 17.1 判定口径
+
+| 判定 | 触发条件 | 建议动作 |
+| --- | --- | --- |
+| `LOW_TRUST` | 盲审一致率 < 80%（与 Gate 校准阈值同口径） | 复核 rubric；改 CLAIMS 逐条判分；换 Judge 模板版本 |
+| `NOISY` | UNKNOWN + 未执行 ≥ 20% | 补证据（检索上下文 / 工具轨迹 / 参考答案）或放宽 `referenceRequired` |
+| `COSTLY` | 窗口成本 > 阈值（默认 5） | 开评测缓存，或改用表达式 / 正则 / 轨迹等确定性评估器 |
+| `OK` | 以上都不触发 | — |
+| 数据集 `ROTTING` | 陈旧样本（> 90 天）≥ 50%，或最新 revision 超 30 天 | 补新样本并冻结新 revision |
+| 数据集 `WARNING` | 陈旧 ≥ 25%，或 revision 超 14 天 | 按蓝图补齐缺失类别 |
+
+- `ERROR` 与 `EVAL_UNAVAILABLE` 单独计为「未执行」，**不混进 UNKNOWN**——执行失败与证据不足是两回事。
+- 盲审样本不足 10 条时会明确提示「一致率还不具统计意义」「建议补样本」。
+- 缺模型价目时 `priced=false`、`cost=null`，不伪造金额。
+
+### 17.2 API
+
+```bash
+# 一次拿全（默认最近 7 天、陈旧阈值 90 天）
+curl -s "$HOST/api/v1/evaluator-quality?windowHours=168&staleDays=90" -H "Authorization: Bearer $JWT"
+```
+
+关键字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `leastTrusted` | 最不可信的评估器（LOW_TRUST → NOISY → COSTLY → 一致率升序） |
+| `evaluators[]` | 每个评估器的 evalCount / passRate / unknownRate / notExecutedRate / agreementRate / cost / verdict / advice |
+| `datasets[]` | activeItems / staleItems / staleShare / latestRevision / revisionAgeDays / blueprintConfigured / verdict |
+| `cache` | 窗口内缓存条目与节省 token（工作空间级） |
+| `alerts[]` | 当前应关注的评估器与数据集（与扫描写入的 Finding 同源） |
+
+### 17.3 告警接入 Alerts
+
+```bash
+# 手动触发一次（每日 03:10 也会自动扫）
+curl -s -X POST "$HOST/api/v1/evaluator-quality/scan" -H "Authorization: Bearer $JWT"
+# → {"findingsCreated":2}
+```
+
+- 写入 `EVALUATOR_QUALITY` / `DATASET_ROT` 两类 Finding，进入既有 Incident 归并与通知；
+- 24 小时内同一对象只报一次（不会每天刷同样的告警）；
+- 质量告警是平台级对象，`agent_key` 使用哨兵值 `*`，在 Alerts 页与「某个 agent」的告警区分得开。
+
+### 17.4 配置项
+
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| `emonlens.evaluator-quality.window-hours` | 168 | 默认统计窗口 |
+| `emonlens.evaluator-quality.stale-days` | 90 | 「陈旧样本」判定天数 |
+| `emonlens.evaluator-quality.min-agreement` | 80 | LOW_TRUST 阈值（%） |
+| `emonlens.evaluator-quality.unknown-alert-rate` | 0.2 | NOISY 阈值 |
+| `emonlens.evaluator-quality.costly-per-window` | 5.0 | COSTLY 成本阈值 |
+| `emonlens.evaluator-quality.min-reviewed-for-trust` | 10 | 低于该盲审条数只给补样本建议 |
+| `emonlens.evaluator-quality.rot-revision-days` | 30 | revision 超期判 ROTTING |
+| `emonlens.evaluator-quality.warn-revision-days` | 14 | revision 超期判 WARNING |
+| `emonlens.evaluator-quality.cron` | `0 10 3 * * *` | 每日扫描时间 |
+
+
 
 
 

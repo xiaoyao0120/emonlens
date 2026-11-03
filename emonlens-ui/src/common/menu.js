@@ -55,6 +55,7 @@ export const MENU = [
   { key: 'eval-quality', label: '质量总览', icon: ShieldCheckmarkOutline, path: '/quality', perm: 'workspace:trust:overview:query', section: 'EVALUATE' },
   { key: 'eval-configs', label: '评估器', icon: FlaskOutline, path: '/evaluators', perm: 'workspace:trust:evaluator:query', section: 'EVALUATE' },
   { key: 'eval-results', label: '评估结果', icon: AnalyticsOutline, path: '/evaluations', perm: 'workspace:trust:evaluation:query', section: 'EVALUATE' },
+  { key: 'eval-quality-board', label: '评估器质量', icon: ShieldCheckmarkOutline, path: '/evaluator-quality', perm: 'workspace:trust:evaluation:query', section: 'EVALUATE' },
   { key: 'eval-assets', label: '数据集与资产', icon: CubeOutline, path: '/datasets', group: 'assets', perm: 'workspace:trust:dataset:query', section: 'EVALUATE' },
   { key: 'eval-business', label: '业务实验', icon: AnalyticsOutline, path: '/business-experiments', perm: 'workspace:trust:evaluation:query', section: 'EVALUATE' },
   { key: 'eval-annotations', label: '标注队列', icon: ClipboardOutline, path: '/annotation-queues', perm: 'workspace:trust:trace:query', section: 'EVALUATE' },

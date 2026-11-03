@@ -230,11 +230,25 @@ EmonLens 与竞品的能力分布是互补的：
   - 已知偏差：categorical 目前是内置词表映射（不提供自定义标签体系）；token 限流是单实例内存窗口，
     多实例部署时各实例独立计数（仍能挡住脚本刷量，但不是全局限额）。
 
-#### R2-3 评估器质量看板
+#### R2-3 评估器质量看板　✅ 已实现（一致率 / UNKNOWN 率 / 成本 / 数据集腐烂 / 告警接入）
 
 - **对标**：LangSmith auditing evaluator scores；Braintrust dataset 漂移监控。
 - **方案要点**：按评估器汇总盲审一致率趋势、UNKNOWN / ERROR 率、缓存命中率、成本；低一致率评估器给出「降级建议」（如改 CLAIMS、换模板版本）；数据集蓝图覆盖 / 保鲜度告警接入 Alerts 页。
 - **验收标准**：能回答「哪个评估器最不可信、哪个数据集在腐烂」。
+- **实现落点**：`EvaluatorQualityService` + `EvaluatorQualityController`（`GET /api/v1/evaluator-quality`、
+  `POST /api/v1/evaluator-quality/scan`）+ `EvaluatorQualityScheduler`（每日扫描）+ UI「评估器质量」页。
+  - **一次报告两个答案**：`leastTrusted` 直接给最不可信的评估器（按 LOW_TRUST → NOISY → COSTLY 排序，
+    再按一致率升序）；`datasets[]` 给每个数据集的陈旧样本占比与 revision 年龄，腐烂的排最前。
+  - **判定口径**：一致率 < 80% → `LOW_TRUST`（与 Gate 的校准阈值同口径）；UNKNOWN + 未执行 ≥ 20% → `NOISY`
+    （ERROR / EVAL_UNAVAILABLE 单独计为「未执行」，不混进 UNKNOWN）；窗口成本超阈值 → `COSTLY`；
+    数据集陈旧占比 ≥ 50% 或 revision 超 30 天 → `ROTTING`，≥ 25% / 14 天 → `WARNING`。
+  - **可解释建议**：低一致率建议改 CLAIMS 拆条或换模板版本；高 UNKNOWN 建议补证据或放宽 referenceRequired；
+    高成本建议开缓存或改用确定性评估器；盲审样本不足 10 条时明确提示「一致率还不具统计意义」。
+  - **告警接入 Alerts**：扫描把结论写成 Finding（`EVALUATOR_QUALITY` / `DATASET_ROT`），
+    复用既有 Incident 归并与通知；24 小时内同一对象只报一次。质量告警是平台级对象，
+    `agent_key` 用哨兵值 `*`。
+  - 已知偏差：① 缓存指标按工作空间汇总（缓存 key 绑定 sample 指纹与模板 hash，不绑定 evaluator key），
+    没有拆到单个评估器；② 数据集「蓝图覆盖」只标注是否配置，未做类别级缺口对账（那部分仍在数据集健康页）。
 
 #### R2-4 实验对比增强
 
