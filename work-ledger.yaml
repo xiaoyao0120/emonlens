@@ -89,15 +89,24 @@ work_items:
 
   - id: r2-2-feedback
     title: 端用户反馈采集（presigned token + score 类型学）
-    status: planned
+    status: completed
     goal: emonlens-eval-platform
     milestone: r2-online
     required: true
     priority: P1
+    summary: >-
+      预签 token 只授予「给指定 trace 写一条反馈」：库中只存 sha256、可限次数/过期/吊销、按 token 限流；
+      四类 score（numeric/categorical/boolean/correction）归一后同时写 et_eval_result，既有监控与质量视图直接可用；
+      负反馈跨阈值产生一条 Finding；correction 可一键收录为数据集样本并走样本契约校验。
     acceptance:
       - token 泄露场景只能写分数不能读正文
       - correction 类反馈进数据集时走样本契约校验
-    next_action: 设计反馈 token 的签发、限额、过期与限流，并复用既有 human score 体系
+    next_action: >-
+      进入 R2-3 评估器质量看板；同时把 R2-2 的两处已知偏差记入后续项（自定义分类标签体系、多实例共享限流）。
+    evidence:
+      - emonlens-server/src/test/java/io/emonlens/server/EndUserFeedbackFlowTest.java
+      - emonlens-server/sql/migrations/2026-11-12-end-user-feedback.sql
+      - docs/EmonLens评测增强功能使用指南.md
     depends_on: []
 
   - id: r2-3-quality-board
