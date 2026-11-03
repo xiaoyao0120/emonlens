@@ -23,6 +23,15 @@ public interface LlmClient {
         return new ChatReply(chat(systemPrompt, userPrompt, model, temperature), null, null);
     }
 
+    /**
+     * R3-4：带图片的多模态评审。默认实现退化为纯文本调用（fake/旧端点不需要感知图片）；
+     * 真正支持 vision 的端点覆写它，把图片作为 content parts 发给模型。
+     */
+    default ChatReply chatWithImages(String systemPrompt, String userPrompt, java.util.List<String> imageUrls,
+                                     String model, double temperature) throws LlmUnavailableException {
+        return chatWithUsage(systemPrompt, userPrompt, model, temperature);
+    }
+
     /** 评审回复：content + 可选 token 消耗（Java 11 无 record，用不可变类） */
     final class ChatReply {
         public final String content;

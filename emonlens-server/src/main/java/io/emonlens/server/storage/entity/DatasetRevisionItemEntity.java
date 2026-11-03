@@ -27,6 +27,8 @@ public class DatasetRevisionItemEntity {
     private String expectedToolsJson;
     private String turnsJson;
     private String expectationsJson;
+    /** R3-4：多模态附件随修订一起冻结 */
+    private String attachmentsJson;
     private String purposeTags;
     private String riskLevel;
     private String groupKey;

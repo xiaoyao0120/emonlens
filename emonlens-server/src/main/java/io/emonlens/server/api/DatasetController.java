@@ -101,6 +101,7 @@ public class DatasetController {
     private final DatasetRevisionService revisionService;
     private final EvalTaskService evalTaskService;
     private final DatasetRevisionMapper revisionMapper;
+    private final io.emonlens.server.engine.eval.AttachmentPolicy attachmentPolicy;
     private final DatasetRevisionItemMapper revisionItemMapper;
     private final JudgeReviewMapper judgeReviewMapper;
     private final DatasetHealthSnapshotMapper healthSnapshotMapper;
@@ -140,6 +141,8 @@ public class DatasetController {
         private Object retrievalContext;
         /** JSON 数组：期望工具 */
         private Object expectedTools;
+        /** JSON 数组：多模态附件（IMAGE：url 或 base64） */
+        private Object attachments;
         /** JSON 数组：多轮会话 */
         private Object turns;
         /** JSON 对象：样本级 must/mustNot */
@@ -428,6 +431,7 @@ public class DatasetController {
         String expectedToolsJson = evaluationCaseService.toJson(request.getExpectedTools());
         String turnsJson = evaluationCaseService.toJson(request.getTurns());
         String expectationsJson = evaluationCaseService.toJson(request.getExpectations());
+        String attachmentsJson = attachmentPolicy.normalize(request.getAttachments());
         boolean hasV2 = io.emonlens.server.engine.eval.EvaluationCaseService.hasV2Fields(
                 retrievalJson, expectedToolsJson, turnsJson, expectationsJson);
         int schemaVersion = evaluationCaseService.effectiveSchemaVersion(
@@ -445,6 +449,7 @@ public class DatasetController {
         item.setExpectedToolsJson(expectedToolsJson);
         item.setTurnsJson(turnsJson);
         item.setExpectationsJson(expectationsJson);
+        item.setAttachmentsJson(attachmentsJson);
         item.setPurposeTags(request.getPurposeTags());
         item.setRiskLevel(request.getRiskLevel() == null || request.getRiskLevel().isBlank()
                 ? "UNASSIGNED" : request.getRiskLevel());

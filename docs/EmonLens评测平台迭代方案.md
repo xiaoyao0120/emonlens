@@ -343,11 +343,22 @@ EmonLens 与竞品的能力分布是互补的：
   - 已知偏差：① 校准 few-shot 是"判定倾向提示"（评审记录只有标签与备注、没有样本原文），不是原文片段；
     ② MEAN 策略下若标签分歧仍判 UNKNOWN（分数保留仅供排查），不做连续分数硬切。
 
-#### R3-4 多模态评测（可延后）
+#### R3-4 多模态评测（可延后）　✅ 已实现（图片附件 / vision 证据 / 导出脱敏）
 
 - **对标**：商业三强图片附件评测。
 - **方案要点**：样本契约 v2 增附件字段（image URL / base64，走对象存储与 `TRACE_CONTENT` 权限）；judge 模板证据字段支持图片（端点需 vision 模型）；TRAJECTORY 不涉及。
 - **验收标准**：附件生命周期与导出脱敏口径与正文一致。
+- **实现落点**：`AttachmentPolicy`（校验/渲染/脱敏）+ 样本 `attachments` 字段（`et_dataset_item` 与
+  `et_dataset_revision_item` 同步冻结）+ `LlmClient.chatWithImages`（默认退化纯文本，`HttpLlmClient` 覆写为
+  OpenAI `image_url` / Anthropic `image` content parts）+ judge prompt 的 `Attachments (images; consider them as evidence)` 段。
+  - **校验**：只收 `IMAGE`；mime 白名单 png/jpeg/webp/gif；`url` 仅 http(s)（base64 必须走 `base64` 字段）；
+    单附件 base64 ≤ 256KB、单样本 ≤ 5 个。超限一律 400，不静默截断。
+  - **URL 与 SSRF**：平台自己不抓取 URL，只把它传给模型端点，因此没有服务端请求伪造面；
+    base64 附件不内联进 prompt（只给长度），避免 prompt 膨胀——已知偏差。
+  - **生命周期**：附件随样本快照与 revision 冻结，运行后再改样本不影响已受理 run 的证据。
+  - **导出脱敏**：有 `TRACE_CONTENT` 导原文；无权限时 base64 换成 `base64_sha256` 占位，URL 保留
+    （URL 本身不含内容）——与正文导出同口径。
+  - **TRAJECTORY**：不消费附件（工具序列与图片无关）。
 
 ### 明确不做（non-goals）
 

@@ -57,6 +57,7 @@ public class DatasetRunSnapshotService {
 
     private final ObjectMapper objectMapper;
     private final EmonLensProperties properties;
+    private final AttachmentPolicy attachmentPolicy;
     private final SysSettingService sysSettingService;
     private final TraceSummaryMapper traceSummaryMapper;
     private final ContentMapper contentMapper;
@@ -169,6 +170,7 @@ public class DatasetRunSnapshotService {
             sample.put("groupKey", item.getGroupKey());
             sample.put("split", item.getSplit());
             sample.put("failureMode", item.getFailureMode());
+            sample.put("attachments", attachmentPolicy.parse(item.getAttachmentsJson()));
 
             if (MODE_TRACE.equals(mode)) {
                 freezeTraceItem(sample, item, dataset.getWorkspaceId());

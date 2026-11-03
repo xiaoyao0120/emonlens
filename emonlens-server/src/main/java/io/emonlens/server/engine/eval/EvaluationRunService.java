@@ -107,6 +107,7 @@ public class EvaluationRunService {
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper;
     private final io.emonlens.server.storage.mapper.JudgeReviewMapper judgeReviewMapper;
+    private final AttachmentPolicy attachmentPolicy;
     private final EmonLensProperties properties;
     private final JudgeTemplateService judgeTemplateService;
     private final TrajectoryEvaluator trajectoryEvaluator;
@@ -840,6 +841,11 @@ public class EvaluationRunService {
         if (!instruction.isBlank()) {
             user.append("\n\nPreset task:\n").append(instruction);
         }
+        // R3-4：把附件作为证据写进 prompt；外链图片同时交给 vision 端点
+        String attachmentBlock = attachmentPolicy.promptBlock(sample.getAttachments());
+        if (!attachmentBlock.isBlank()) {
+            user.append("\n\n").append(attachmentBlock);
+        }
         // R3-3：校准提示 + 多 judge（样本路径与 trace 路径保持同一套口径）
         String calibration = calibrationBlock(evaluator, spec);
         if (!calibration.isBlank()) {
@@ -851,7 +857,8 @@ public class EvaluationRunService {
         }
         LlmClient.ChatReply reply;
         try {
-            reply = llmClient.chatWithUsage(system, user.toString(),
+            reply = llmClient.chatWithImages(system, user.toString(),
+                    attachmentPolicy.imageUrls(sample.getAttachments()),
                     spec.getJudgeModel(), spec.getTemperature() == null ? 0.0 : spec.getTemperature());
         } catch (RunTokenBudgetStore.BudgetExceededException e) {
             throw e;
@@ -1333,7 +1340,8 @@ public class EvaluationRunService {
         for (String model : models) {
             LlmClient.ChatReply reply;
             try {
-                reply = llmClient.chatWithUsage(system, user, model, temperature);
+                reply = llmClient.chatWithImages(system, user,
+                        attachmentPolicy.imageUrls(sample.getAttachments()), model, temperature);
             } catch (RunTokenBudgetStore.BudgetExceededException e) {
                 throw e;
             } catch (LlmUnavailableException e) {

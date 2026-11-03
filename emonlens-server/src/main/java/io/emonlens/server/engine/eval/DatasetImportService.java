@@ -50,6 +50,7 @@ public class DatasetImportService {
     private final DatasetHealthService datasetHealthService;
     private final ObjectMapper objectMapper;
     private final EmonLensProperties properties;
+    private final AttachmentPolicy attachmentPolicy;
 
     @Data
     public static class ImportResult {
@@ -205,6 +206,10 @@ public class DatasetImportService {
             row.put("turns", evaluationCaseService.readForResponse(item.getTurnsJson()));
             row.put("expectations", evaluationCaseService.readForResponse(item.getExpectationsJson()));
             row.put("metadata", evaluationCaseService.readForResponse(item.getMetadataJson()));
+            // R3-4：附件与正文同口径——有 TRACE_CONTENT 导原文，没有则 base64 换 sha256 占位
+            row.put("attachments", contentAllowed
+                    ? attachmentPolicy.parse(item.getAttachmentsJson())
+                    : attachmentPolicy.redacted(item.getAttachmentsJson()));
         }
         return row;
     }
@@ -321,6 +326,7 @@ public class DatasetImportService {
         String expectedTools = jsonField(raw, "expected_tools", "expectedTools");
         String turns = jsonField(raw, "turns");
         String expectations = jsonField(raw, "expectations");
+        String attachments = jsonField(raw, "attachments");
         String traceId = text(raw, "trace_id", "traceId");
         if ((traceId == null || traceId.isBlank()) && (input == null || input.isBlank())) {
             throw new EmonLensException(ErrorCode.BAD_REQUEST, "trace_id 或 input 至少填一项");
@@ -342,6 +348,7 @@ public class DatasetImportService {
         item.setExpectedToolsJson(expectedTools);
         item.setTurnsJson(turns);
         item.setExpectationsJson(expectations);
+        item.setAttachmentsJson(attachmentPolicy.normalize(attachments));
         item.setPurposeTags(text(raw, "purpose_tags", "purposeTags"));
         item.setRiskLevel(defaultIfBlank(text(raw, "risk_level", "riskLevel"), "UNASSIGNED"));
         item.setGroupKey(text(raw, "group_key", "groupKey"));

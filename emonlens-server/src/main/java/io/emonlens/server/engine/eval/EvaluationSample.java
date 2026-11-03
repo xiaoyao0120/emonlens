@@ -39,6 +39,8 @@ public class EvaluationSample {
     private List<Map<String, Object>> turns = new ArrayList<>();
     /** 样本级期望：must / mustNot / unknownPolicy */
     private Map<String, Object> expectations = new LinkedHashMap<>();
+    /** R3-4：多模态附件（IMAGE：mime/url|base64/alt） */
+    private List<Map<String, Object>> attachments = new ArrayList<>();
 
     private Integer spanCount;
     private Integer errorCount;

@@ -33,6 +33,8 @@ public final class SampleSnapshots {
         sample.setTurns(mapList(snapshot.get("turns")));
         Map<String, Object> expectations = asMap(snapshot.get("expectations"));
         sample.setExpectations(expectations == null ? new LinkedHashMap<>() : expectations);
+        // R3-4：附件随快照冻结；运行后再改样本不影响已受理 run 的多模态证据
+        sample.setAttachments(mapList(snapshot.get("attachments")));
         sample.setSpanCount(asInteger(snapshot.get("spanCount")));
         sample.setErrorCount(asInteger(snapshot.get("errorCount")));
         sample.setDurationMs(asLong(snapshot.get("durationMs")));

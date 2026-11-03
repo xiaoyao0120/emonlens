@@ -26,6 +26,8 @@ public class DatasetItemEntity {
     private String expectedToolsJson;
     private String turnsJson;
     private String expectationsJson;
+    /** R3-4：多模态附件（JSON 数组：kind/mime/url|base64/alt）；不涉及 TRAJECTORY */
+    private String attachmentsJson;
     /** case/v2 的 canonical SHA-256；旧样本为空，由 revision/snapshot 计算 */
     private String contentHash;
     /** MANUAL / TRACE / IMPORT / SYNTHETIC */

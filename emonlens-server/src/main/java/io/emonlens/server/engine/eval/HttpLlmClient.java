@@ -78,17 +78,18 @@ public class HttpLlmClient implements LlmClient {
     @Override
     public ChatReply chatWithUsage(String systemPrompt, String userPrompt, String model, double temperature)
             throws LlmUnavailableException {
-        return doChat(null, systemPrompt, userPrompt, model, temperature);
+        return doChat(null, systemPrompt, userPrompt, null, model, temperature);
     }
 
     /** override 非空且配置了 base-url 时完全按 override 执行（连通性测试未保存的表单值）。 */
     public ChatReply chat(SysSettingService.EvalLlm override, String systemPrompt, String userPrompt,
                           String model, double temperature) throws LlmUnavailableException {
-        return doChat(override, systemPrompt, userPrompt, model, temperature);
+        return doChat(override, systemPrompt, userPrompt, null, model, temperature);
     }
 
     private ChatReply doChat(SysSettingService.EvalLlm override, String systemPrompt, String userPrompt,
-                             String model, double temperature) throws LlmUnavailableException {
+                             java.util.List<String> imageUrls, String model, double temperature)
+            throws LlmUnavailableException {
         SysSettingService.EvalLlm cfg = override != null && override.configured()
                 ? override : effectiveConfig();
         String baseUrl = cfg.getBaseUrl();
@@ -107,8 +108,8 @@ public class HttpLlmClient implements LlmClient {
             RunTokenBudgetStore.Reservation reservation = tokenBudgetStore.reserve(systemPrompt, userPrompt);
             try {
                 Map<String, Object> body = PROTOCOL_ANTHROPIC.equals(protocol)
-                        ? anthropicBody(systemPrompt, userPrompt, effectiveModel, temperature)
-                        : openAiBody(systemPrompt, userPrompt, effectiveModel, temperature);
+                        ? anthropicBody(systemPrompt, userPrompt, imageUrls, effectiveModel, temperature)
+                        : openAiBody(systemPrompt, userPrompt, imageUrls, effectiveModel, temperature);
                 HttpResult result = post(endpoint, timeoutMs, protocol, apiKey,
                         objectMapper.writeValueAsBytes(body));
                 // 部分 Claude（如 Haiku 5.5）及推理模型拒绝 temperature 参数（400 temperature is deprecated）。
@@ -247,13 +248,22 @@ public class HttpLlmClient implements LlmClient {
     }
 
     private Map<String, Object> openAiBody(String systemPrompt, String userPrompt,
-                                           String model, double temperature) {
+                                           java.util.List<String> imageUrls, String model, double temperature) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model);
         body.put("temperature", temperature);
+        Object userContent = userPrompt;
+        if (imageUrls != null && !imageUrls.isEmpty()) {
+            List<Map<String, Object>> parts = new java.util.ArrayList<>();
+            parts.add(Map.of("type", "text", "text", userPrompt));
+            for (String url : imageUrls) {
+                parts.add(Map.of("type", "image_url", "image_url", Map.of("url", url)));
+            }
+            userContent = parts;
+        }
         body.put("messages", List.of(
                 Map.of("role", "system", "content", systemPrompt),
-                Map.of("role", "user", "content", userPrompt)));
+                Map.of("role", "user", "content", userContent)));
         if (tokenBudgetStore.active()) {
             body.put("max_tokens", RunTokenBudgetStore.MAX_OUTPUT_TOKENS);
         }
@@ -261,7 +271,7 @@ public class HttpLlmClient implements LlmClient {
     }
 
     private Map<String, Object> anthropicBody(String systemPrompt, String userPrompt,
-                                              String model, double temperature) {
+                                              java.util.List<String> imageUrls, String model, double temperature) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model);
         body.put("max_tokens", tokenBudgetStore.active()
@@ -269,7 +279,16 @@ public class HttpLlmClient implements LlmClient {
         body.put("temperature", temperature);
         // Messages API 的 system 是顶层字段，不是 messages 里的一条。
         body.put("system", systemPrompt);
-        body.put("messages", List.of(Map.of("role", "user", "content", userPrompt)));
+        Object userContent = userPrompt;
+        if (imageUrls != null && !imageUrls.isEmpty()) {
+            List<Map<String, Object>> parts = new java.util.ArrayList<>();
+            parts.add(Map.of("type", "text", "text", userPrompt));
+            for (String url : imageUrls) {
+                parts.add(Map.of("type", "image", "source", Map.of("type", "url", "url", url)));
+            }
+            userContent = parts;
+        }
+        body.put("messages", List.of(Map.of("role", "user", "content", userContent)));
         return body;
     }
 

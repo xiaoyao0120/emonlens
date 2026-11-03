@@ -83,6 +83,7 @@ public class DatasetRevisionService {
             frozen.setExpectedToolsJson(item.getExpectedToolsJson());
             frozen.setTurnsJson(item.getTurnsJson());
             frozen.setExpectationsJson(item.getExpectationsJson());
+        frozen.setAttachmentsJson(item.getAttachmentsJson());
             frozen.setPurposeTags(item.getPurposeTags());
             frozen.setRiskLevel(item.getRiskLevel());
             frozen.setGroupKey(item.getGroupKey());
@@ -140,6 +141,7 @@ public class DatasetRevisionService {
             item.setExpectedToolsJson(frozen.getExpectedToolsJson());
             item.setTurnsJson(frozen.getTurnsJson());
             item.setExpectationsJson(frozen.getExpectationsJson());
+        item.setAttachmentsJson(frozen.getAttachmentsJson());
             item.setContentHash(frozen.getContentHash());
             item.setPurposeTags(frozen.getPurposeTags());
             item.setRiskLevel(frozen.getRiskLevel());

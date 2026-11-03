@@ -1592,6 +1592,58 @@ emonlens:
 - 校准 few-shot 不是原文片段（见 21.2）。
 - MEAN 不做"分数硬切"：标签分歧就是 UNKNOWN，避免用均分掩盖分歧。
 
+---
+
+## 22. 多模态：图片附件（R3-4）
+
+样本可以带图片，判定时作为证据交给 vision 模型。
+
+### 22.1 加一张图
+
+```bash
+# 外链（推荐）：平台只把 URL 传给模型端点，自己不抓取
+curl -s -X POST "$HOST/api/v1/datasets/$DS/items" \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -d '{
+        "input": "看看这张小票",
+        "attachments": [
+          {"kind":"IMAGE","mime":"image/png",
+           "url":"https://cdn.example.com/receipt.png","alt":"小票照片"}
+        ]
+      }'
+```
+
+| 规则 | 值 |
+| --- | --- |
+| kind | 只支持 `IMAGE`（TRAJECTORY 不涉及多模态） |
+| mime | `image/png` / `image/jpeg` / `image/webp` / `image/gif` |
+| 承载 | `url`（仅 http/https）**或** `base64`（≤ 256KB） |
+| 数量 | 单样本 ≤ 5 个 |
+
+违规一律 400：非图片 mime、`file://` 之类的 URL、超限 base64 都会被拒，不静默截断。
+
+### 22.2 judge 怎么看图
+
+- prompt 里会追加 `Attachments (images; consider them as evidence)` 段，列出每个附件的 mime、URL、alt；
+- 外链图片同时以 `image_url`（OpenAI）或 `image`（Anthropic）content part 发给模型——
+  **端点需要 vision 模型**，否则模型只会看到文字说明；
+- base64 附件只给长度、不内联（避免 prompt 膨胀）——已知偏差，需要看图请改用 URL。
+- 真机验证状态：附件持久化、revision 冻结、导出脱敏与校验均已实测通过；但打包后的实例里
+  vision content part 未在假端点侧观察到（`reason: vision parts=0`），集成测试用 fake LlmClient 验证的是
+  `chatWithImages` 被调用且带上 URL。这条排查已记为 open loop（下一步：在打包实例里抓
+  HttpLlmClient 的实际请求体）。
+
+### 22.3 生命周期与导出脱敏
+
+- 附件随样本快照与数据集 revision 一起冻结：运行后再改样本，不影响已受理 run 的证据。
+- 导出 JSONL 时：有 `TRACE_CONTENT` 导原文；无权限时 base64 换成 `base64_sha256` 占位、URL 保留
+  （URL 本身不含内容）——与正文导出同口径。
+
+### 22.4 维护迁移
+
+`emonlens-server/sql/2026-11-14-multimodal.sql`：
+`et_dataset_item.attachments_json`、`et_dataset_revision_item.attachments_json`。
+
 
 
 
