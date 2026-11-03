@@ -71,23 +71,27 @@ public class ExperimentInsightController {
     }
 
     /**
-     * repetitions：按该 run 的冻结配置再跑一次（新 run 与原 run 候选指纹相同，自动归入同一组）。
-     * 受活动 run 容量约束：已有活动 run 时返回 429，等它结束后再调用即可凑齐 N 次。
+     * repetitions：按该 run 的冻结配置再跑（新 run 与原 run 候选指纹相同，自动归入同一组）。
+     * 可选 body {"count": N}（默认 1，最多 5）：受活动 run 容量约束，被 429 拒绝的那部分
+     * 如实返回 refused / capacityLimited，由调用方决定何时补齐。
      */
-    @PostMapping("/runs/{runId}/repetition")
+    @org.springframework.web.bind.annotation.PostMapping(value = "/runs/{runId}/repetition",
+            consumes = {org.springframework.http.MediaType.APPLICATION_JSON_VALUE,
+                    org.springframework.http.MediaType.ALL_VALUE})
     @RequiresPermission(Permissions.EVALUATION_RUN)
     @Audit(action = "dataset.run.repetition", resourceType = "dataset")
     public ApiResult<Map<String, Object>> repeat(@PathVariable String datasetId,
                                                  @PathVariable String runId,
-                                                 @RequestHeader("Idempotency-Key") String idempotencyKey) {
-        var run = datasetRunService.repeatFromRun(CurrentContext.require().getWorkspaceId(),
-                datasetId, runId, idempotencyKey);
-        return ApiResult.ok(Map.of(
-                "runId", run.getId(),
-                "sourceRunId", runId,
-                "status", run.getStatus(),
-                "candidateFingerprint", run.getCandidateFingerprint() == null ? "" : run.getCandidateFingerprint(),
-                "repetitionCount", datasetRunService.repetitionCount(
-                        CurrentContext.require().getWorkspaceId(), datasetId, run)));
+                                                 @RequestHeader("Idempotency-Key") String idempotencyKey,
+                                                 @org.springframework.web.bind.annotation.RequestBody(
+                                                         required = false)
+                                                 Map<String, Object> body) {
+        int count = 1;
+        if (body != null && body.get("count") instanceof Number) {
+            count = (int) Math.round(((Number) body.get("count")).doubleValue());
+        }
+        var payload = datasetRunService.repeatFromRunMany(CurrentContext.require().getWorkspaceId(),
+                datasetId, runId, idempotencyKey, count);
+        return ApiResult.ok(payload);
     }
 }

@@ -205,19 +205,22 @@ class ExperimentInsightFlowTest extends AbstractIntegrationTest {
                                 .header("Idempotency-Key", "insight-repeat-1"))
                 .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8));
         assertThat(repeated.path("code").asInt()).as("repeat: %s", repeated).isZero();
-        String repeatId = repeated.path("data").path("runId").asText();
+        assertThat(repeated.path("data").path("createdCount").asInt()).isEqualTo(1);
+        assertThat(repeated.path("data").path("refused").asInt()).isZero();
+        String repeatId = repeated.path("data").path("created").get(0).path("runId").asText();
         assertThat(repeatId).isNotEqualTo(runId);
-        assertThat(repeated.path("data").path("candidateFingerprint").asText())
+        assertThat(datasetRunMapper.selectById(repeatId).getCandidateFingerprint())
                 .isEqualTo(datasetRunMapper.selectById(runId).getCandidateFingerprint());
 
-        // 同 Idempotency-Key 幂等
+        // 同 Idempotency-Key 幂等：返回同一条 run，不新建
         JsonNode again = readTree(mockMvc.perform(
                         MockMvcRequestBuilders.post("/api/v1/datasets/" + datasetId
                                         + "/runs/" + runId + "/repetition")
                                 .header("Authorization", adminAuth())
                                 .header("Idempotency-Key", "insight-repeat-1"))
                 .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8));
-        assertThat(again.path("data").path("runId").asText()).isEqualTo(repeatId);
+        assertThat(again.path("data").path("createdCount").asInt()).isEqualTo(1);
+        assertThat(again.path("data").path("created").get(0).path("runId").asText()).isEqualTo(repeatId);
 
         // 同指纹归组：复跑与源 run 属于同一 repetitions 组
         await(() -> datasetRunMapper.selectById(repeatId),
@@ -227,5 +230,69 @@ class ExperimentInsightFlowTest extends AbstractIntegrationTest {
                 + "/leaderboard?windowDays=7&minCoverage=90"));
         assertThat(leaderboard.path("data").path("rows").get(0).path("runs").asInt())
                 .isEqualTo(2);
+    }
+
+    @Test
+    void repeatManyReportsCapacityRefusalsInsteadOfFailing() throws Exception {
+        String datasetId = createDataset("insight-repeat-many");
+        String traceId = "insight-repeat-many-trace";
+        post("/api/v1/ingest/events", List.of(span("insight-agent", traceId, "root", null,
+                "agent", "invoke_agent", null, null, 1, 5)));
+        await(() -> {
+            try {
+                return readTree(get("/api/v1/traces/" + traceId)).path("data").path("summary");
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        }, node -> "COMPLETED".equals(node.path("status").asText()), ASYNC_TIMEOUT_MS);
+        readTree(postApi("/api/v1/datasets/" + datasetId + "/items",
+                Map.of("traceId", traceId)));
+        String evaluatorId = readTree(postApi("/api/v1/evaluators", Map.of(
+                "evaluatorKey", "insight-expr-many", "type", "EXPRESSION",
+                "spec", Map.of("type", "EXPRESSION", "passWhen", "error_count >= 0"))))
+                .path("data").path("id").asText();
+        JsonNode created = readTree(mockMvc.perform(
+                        MockMvcRequestBuilders.post("/api/v1/datasets/" + datasetId + "/runs/async")
+                                .header("Authorization", adminAuth())
+                                .header("Idempotency-Key", "many-run-1")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(objectMapper.writeValueAsString(Map.of(
+                                        "evaluatorIds", List.of(evaluatorId), "mode", "TRACE"))))
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(created.path("code").asInt()).as("run: %s", created).isZero();
+        String runId = created.path("data").path("runId").asText();
+        await(() -> datasetRunMapper.selectById(runId),
+                run -> run != null && DatasetRunEntity.STATUS_COMPLETED.equals(run.getStatus()),
+                ASYNC_TIMEOUT_MS);
+
+        // 默认 maxActiveRuns=1：第一条复跑占坑后，其余被 429 拒绝并如实上报
+        JsonNode batch = readTree(mockMvc.perform(
+                        MockMvcRequestBuilders.post("/api/v1/datasets/" + datasetId
+                                        + "/runs/" + runId + "/repetition")
+                                .header("Authorization", adminAuth())
+                                .header("Idempotency-Key", "many-repeat-1")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(objectMapper.writeValueAsString(Map.of("count", 3))))
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(batch.path("code").asInt()).as("batch: %s", batch).isZero();
+        JsonNode data = batch.path("data");
+        assertThat(data.path("requested").asInt()).isEqualTo(3);
+        int createdCount = data.path("createdCount").asInt();
+        assertThat(createdCount).isGreaterThanOrEqualTo(1);
+        assertThat(data.path("refused").asInt()).isEqualTo(3 - createdCount);
+        assertThat(data.path("capacityLimited").asBoolean()).isTrue();
+
+        for (JsonNode row : data.path("created")) {
+            String createdRunId = row.path("runId").asText();
+            assertThat(datasetRunMapper.selectById(createdRunId).getCandidateFingerprint())
+                    .isEqualTo(datasetRunMapper.selectById(runId).getCandidateFingerprint());
+            await(() -> datasetRunMapper.selectById(createdRunId),
+                    run -> run != null && DatasetRunEntity.STATUS_COMPLETED.equals(run.getStatus()),
+                    ASYNC_TIMEOUT_MS);
+        }
+        JsonNode leaderboard = readTree(get("/api/v1/datasets/" + datasetId
+                + "/leaderboard?windowDays=7&minCoverage=90"));
+        assertThat(leaderboard.path("data").path("rows").get(0).path("runs").asInt())
+                .isEqualTo(1 + createdCount);
     }
 }

@@ -1957,6 +1957,43 @@ public class DatasetRunService {
         return simulation;
     }
 
+    /**
+     * R2-4 收尾：按同一冻结配置请求 N 次复跑。受活动 run 容量约束——某一次被 429 拒绝时
+     * 停止创建并如实返回 created/refused，让调用方决定何时补齐（不静默少建、也不排队占坑）。
+     */
+    public Map<String, Object> repeatFromRunMany(String workspaceId, String datasetId, String runId,
+                                                 String requestKey, int count) {
+        int requested = Math.max(1, Math.min(count, 5));
+        List<Map<String, Object>> created = new ArrayList<>();
+        int refused = 0;
+        String lastRefusalReason = null;
+        for (int i = 1; i <= requested; i++) {
+            try {
+                DatasetRunEntity run = repeatFromRun(workspaceId, datasetId, runId, requestKey + "-" + i);
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("runId", run.getId());
+                row.put("status", run.getStatus());
+                created.add(row);
+            } catch (EmonLensException e) {
+                if (e.getErrorCode() == ErrorCode.RATE_LIMITED) {
+                    refused = requested - created.size();
+                    lastRefusalReason = e.getMessage();
+                    break;
+                }
+                throw e;
+            }
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("sourceRunId", runId);
+        payload.put("requested", requested);
+        payload.put("created", created);
+        payload.put("createdCount", created.size());
+        payload.put("refused", refused);
+        payload.put("capacityLimited", refused > 0);
+        payload.put("refusalReason", lastRefusalReason);
+        return payload;
+    }
+
     /** 同一数据集内与给定 run 拥有相同候选指纹的 run 数量（repetitions 组大小，含自己）。 */
     public int repetitionCount(String workspaceId, String datasetId, DatasetRunEntity run) {
         if (run.getCandidateFingerprint() == null || run.getCandidateFingerprint().isBlank()) {

@@ -1358,11 +1358,18 @@ curl -s "$HOST/api/v1/datasets/$DS/runs/scatter?windowDays=30&minCoverage=90&mod
 # 以某个已完成 run 的冻结配置再跑一次（新 run 与源 run 候选指纹相同 → 自动同组）
 curl -s -X POST "$HOST/api/v1/datasets/$DS/runs/$RUN/repetition" \
   -H "Authorization: Bearer $JWT" -H "Idempotency-Key: rep-$RUN-2"
-# → {"runId":"...","repetitionCount":2,...}
+# → {"createdCount":1,"refused":0,"created":[{"runId":"..."}],...}
+
+# 一次请求凑 N 次（最多 5）：容量不够时如实返回 refused，不会静默少建
+curl -s -X POST "$HOST/api/v1/datasets/$DS/runs/$RUN/repetition" \
+  -H "Authorization: Bearer $JWT" -H "Idempotency-Key: rep-$RUN-batch" \
+  -H "Content-Type: application/json" -d '{"count":3}'
+# → {"requested":3,"createdCount":1,"refused":2,"capacityLimited":true,...}
 ```
 
 - 复用 `accept()` 的受理链路：冻结配置、候选指纹、容量与幂等全部沿用，所以**同指纹即同组**。
-- 每次只创建一条（受活动 run 容量约束，默认同时 1 条）；要凑 N 次就等上一次结束后再调用。
+- `count` 逐条创建、逐条受活动 run 容量约束：被 429 拒绝时立即停止并返回
+  `refused / capacityLimited / refusalReason`，凑 N 次就等容量空出来后用新 Idempotency-Key 补齐。
 - leaderboard 里会给出 `runs`（重复次数）、`passRateMean`、`passRateStdDev`、`passRateVariance`（样本方差）。
 - **成对比较要求同口径**：两个 run 所在组重复次数不同时，`POST /pairwise-evaluations` 返回 400
   （「3 次均值 vs 1 次单跑」不是可比结论）。
@@ -1531,7 +1538,8 @@ curl -s "$HOST/api/v1/datasets/$DS/runs/$RUN/simulation" -H "Authorization: Bear
 
 - 只支持 HTTP 直连；SDK runner 通道（用户环境起 Agent）尚未实现。
 - "目标达成"由模拟用户 LLM 自评，没有独立判定器——persona 提示词写得越具体，停止条件越可靠。
-- 仿真调用只计调用数，不参与 token 预算熔断。
+- 模拟用户 LLM 调用与 judge 一样计入 run 的 token 预算熔断（超出即熔断）；被测 Agent 的 HTTP
+  调用平台无法计量，usage 依赖端点回报。
 
 ---
 
