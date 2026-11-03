@@ -33,6 +33,11 @@ import io.emonlens.server.auth.WorkspaceGuard;
 @RequiredArgsConstructor
 public class EvaluatorService {
 
+    /** LLM_JUDGE 证据字段与 SDK scorer 输入契约共用的样本字段词表 */
+    static final java.util.Set<String> SUPPORTED_SAMPLE_FIELDS = java.util.Set.of(
+            "input", "candidate_output", "expected_output", "retrieval_context",
+            "expected_tools", "tools_called", "turns", "trace_digest");
+
     private final EvaluatorMapper evaluatorMapper;
     private final EvaluatorVersionMapper evaluatorVersionMapper;
     private final ObjectMapper objectMapper;
@@ -317,11 +322,8 @@ public class EvaluatorService {
                 }
             }
             if (parsed.getRequiredFields() != null) {
-                java.util.Set<String> allowed = java.util.Set.of(
-                        "input", "candidate_output", "expected_output", "retrieval_context",
-                        "expected_tools", "tools_called", "turns", "trace_digest");
                 for (String field : parsed.getRequiredFields()) {
-                    if (field == null || !allowed.contains(field)) {
+                    if (field == null || !SUPPORTED_SAMPLE_FIELDS.contains(field)) {
                         errors.add("requiredFields contains unsupported field: " + field);
                     }
                 }
@@ -356,7 +358,22 @@ public class EvaluatorService {
             }
             return errors;
         }
-        errors.add("type must be EXPRESSION, REGEX, LLM_JUDGE or TRAJECTORY");
+        if (EvaluatorEntity.TYPE_SDK.equals(type)) {
+            if (parsed.getRequiredFields() == null || parsed.getRequiredFields().isEmpty()) {
+                errors.add("sdk evaluator requires 'requiredFields'（ scorer 需要的样本字段）");
+                return errors;
+            }
+            for (String field : parsed.getRequiredFields()) {
+                if (field == null || !SUPPORTED_SAMPLE_FIELDS.contains(field)) {
+                    errors.add("requiredFields contains unsupported field: " + field);
+                }
+            }
+            if (parsed.getScorerRef() != null && parsed.getScorerRef().length() > 256) {
+                errors.add("scorerRef too long: max 256 chars");
+            }
+            return errors;
+        }
+        errors.add("type must be EXPRESSION, REGEX, LLM_JUDGE, TRAJECTORY or SDK");
         return errors;
     }
 

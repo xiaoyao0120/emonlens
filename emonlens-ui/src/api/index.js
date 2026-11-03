@@ -64,6 +64,8 @@ export default {
   prompts: (page) => client.get('/prompts', p(page)),
   promptVersions: (name) => client.get(`/prompts/${name}/versions`),
   promptUsage: (name) => client.get(`/prompts/${name}/usage`),
+  // R1-3：从 prompt 版本反查“被哪些 run 评过、Gate 结论是什么”
+  promptRuns: (name) => client.get(`/prompts/${name}/runs`),
   resolvePrompt: (name, label) => client.get(`/prompts/${name}/resolve`, { label }),
   createPrompt: (body) => client.post('/prompts', body),
   setPromptLabel: (name, body) => client.post(`/prompts/${name}/label`, body),
@@ -87,6 +89,18 @@ export default {
 
   // Playground（提示词试跑）
   playgroundRun: (body) => client.post('/playground/run', body),
+
+  // Playground 矩阵实验（R1-2）：试跑产物，不进 Gate
+  estimatePlaygroundMatrix: (body) => client.post('/playground/matrices/estimate', body),
+  createPlaygroundMatrix: (body, idempotencyKey) => client.post(
+    '/playground/matrices', body, { headers: { 'Idempotency-Key': idempotencyKey } }),
+  playgroundMatrices: (params) => client.get('/playground/matrices', params),
+  playgroundMatrix: (id) => client.get(`/playground/matrices/${id}`),
+  playgroundMatrixCsv: (id) => client.getBlob(`/playground/matrices/${id}/export.csv`, {}),
+  diffPlaygroundMatrix: (id, body) => client.post(`/playground/matrices/${id}/diff`, body),
+  playgroundMatrixDiff: (id, diffId) => client.get(`/playground/matrices/${id}/diffs/${diffId}`),
+  promotePlaygroundColumn: (id, columnKey, body) => client.post(
+    `/playground/matrices/${id}/columns/${columnKey}/promote`, body || {}),
 
   // Model Prices（模型价格）
   modelPrices: () => client.get('/model-prices'),
@@ -119,6 +133,10 @@ export default {
   deleteDataset: (id) => client.delete(`/datasets/${id}`),
   datasetDetail: (id) => client.get(`/datasets/${id}`),
   datasetRuns: (id) => client.get(`/datasets/${id}/runs`),
+  datasetRunsByLabel: (id, label) => client.get(`/datasets/${id}/runs`, { label }),
+  // R1-4：CI 基线标签（同一数据集内同标签唯一）
+  labelDatasetRun: (id, runId, runLabel) => client.post(
+    `/datasets/${id}/runs/${runId}/label`, { runLabel }),
   addDatasetItem: (id, body) => client.post(`/datasets/${id}/items`, body),
   updateDatasetItem: (id, itemId, body) => client.put(`/datasets/${id}/items/${itemId}`, body),
   importDatasetItems: (id, body) => client.post(`/datasets/${id}/items/import`, body),

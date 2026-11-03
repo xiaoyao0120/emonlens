@@ -34,38 +34,42 @@ public class IngestController {
 
     private final IngestService ingestService;
     private final PromptMapper promptMapper;
+    private final io.emonlens.server.engine.prompt.PromptService promptService;
 
     /**
      * Prompt 运行时拉取（Langfuse public get_prompt 对标）：数据面用 X-Trust-Key 鉴权，
-     * 供 SDK get_prompt 按 label 解析版本（默认 production）。返回内容与控制面 /prompts/{name}/resolve 一致。
+     * 供 SDK get_prompt 按 label 解析版本（默认 production）。与控制面 /prompts/{name}/resolve
+     * 共用同一套解析口径，并留解析痕迹（source=SDK）。
      */
     @GetMapping("/prompts/{name}/resolve")
     public ApiResult<Map<String, Object>> resolvePrompt(
             @RequestAttribute(IngestKeyFilter.TRUST_CONTEXT_ATTRIBUTE) TrustContext context,
             @PathVariable String name,
             @RequestParam(defaultValue = "production") String label) {
-        PromptEntity hit = promptMapper.selectList(Wrappers.<PromptEntity>lambdaQuery()
-                        .eq(PromptEntity::getWorkspaceId, context.getWorkspaceId())
-                        .eq(PromptEntity::getName, name)
-                        .orderByDesc(PromptEntity::getVersion))
-                .stream()
-                .filter(v -> {
-                    String labels = v.getLabels() == null ? "" : v.getLabels();
-                    if ("latest".equals(label)) {
-                        return true; // 最高版本在 orderByDesc 首位
-                    }
-                    return java.util.Arrays.asList(labels.split(",")).contains(label);
-                })
-                .findFirst()
-                .orElseThrow(() -> new EmonLensException(ErrorCode.NOT_FOUND,
-                        "prompt not found: " + name + " @" + label));
+        PromptEntity hit = promptService.resolve(context.getWorkspaceId(), name, label);
+        promptService.recordResolution(hit, label,
+                io.emonlens.server.engine.prompt.PromptService.SOURCE_SDK, null);
         Map<String, Object> m = new java.util.LinkedHashMap<>();
         m.put("name", hit.getName());
         m.put("version", hit.getVersion());
         m.put("prompt", hit.getPrompt());
-        m.put("config", hit.getConfigJson());
-        m.put("labels", hit.getLabels() == null ? List.of() : List.of(hit.getLabels().split(",")));
+        m.put("promptHash", promptService.contentHash(hit));
+        m.put("config", configOf(hit));
+        m.put("labels", promptService.labelsOf(hit));
         return ApiResult.ok(m);
+    }
+
+    /** configJson → Map：SDK 侧 Prompt.config 是字典，这里与控制面 resolve 口径保持一致。 */
+    private Map<String, Object> configOf(PromptEntity hit) {
+        if (hit.getConfigJson() == null || hit.getConfigJson().isBlank()) {
+            return Map.of();
+        }
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readValue(hit.getConfigJson(), Map.class);
+        } catch (Exception e) {
+            return Map.of();
+        }
     }
 
     @PostMapping("/events")

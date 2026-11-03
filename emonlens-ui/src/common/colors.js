@@ -17,7 +17,9 @@ export const MONITOR_KIND_COLORS = {
 export const EVALUATOR_TYPE_COLORS = {
   EXPRESSION: '#3B77F1',
   REGEX: '#1B8A4E',
-  LLM_JUDGE: '#7B6FD0'
+  LLM_JUDGE: '#7B6FD0',
+  TRAJECTORY: '#C07A2D',
+  SDK: '#2E8B8B'
 }
 
 export const MUTED = '#8A9099'

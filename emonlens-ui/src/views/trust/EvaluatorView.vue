@@ -13,7 +13,7 @@
       <n-data-table class="main-table" flex-height style="height: 100%" :scroll-x="975"
         :columns="columns" :data="records" size="small" :bordered="false" remote
         :pagination="pagination" :loading="loading">
-        <template #empty><EmptyState text="还没有评估器：点右上角「＋ 新建评估器」创建第一个。支持 EXPRESSION（含参考答案精确匹配预设）/ REGEX / LLM_JUDGE（需先在「系统设置」配置 LLM 端点）/ TRAJECTORY（工具轨迹确定性检查）" /></template>
+        <template #empty><EmptyState text="还没有评估器：点右上角「＋ 新建评估器」创建第一个。支持 EXPRESSION（含参考答案精确匹配预设）/ REGEX / LLM_JUDGE（需先在「系统设置」配置 LLM 端点）/ TRAJECTORY（工具轨迹确定性检查）/ SDK（自定义 Python scorer）" /></template>
       </n-data-table>
     </n-card>
 
@@ -74,6 +74,25 @@
             <div class="page-sub">
               确定性检查，不调用 LLM。trajectoryMode: SUBSET（默认）/ ORDER / EXACT；
               没有工具轨迹时返回 UNKNOWN，不判 FAIL。仅 TRACE 模式有工具证据。
+            </div>
+          </n-form-item>
+        </template>
+        <template v-else-if="createForm.type === 'SDK'">
+          <n-form-item label="输入契约（所需样本字段，逗号分隔）" required>
+            <n-input v-model:value="createForm.requiredFieldsText" class="mono"
+                     placeholder="input, candidate_output, expected_output" />
+            <div class="page-sub">
+              声明 scorer 需要哪些样本字段，运行时按契约下发载荷。可用：input / candidate_output /
+              expected_output / retrieval_context / expected_tools / tools_called / turns / trace_digest。
+            </div>
+          </n-form-item>
+          <n-form-item label="scorer 引用（可选）">
+            <n-input v-model:value="createForm.sdkScorerRef" class="mono"
+                     placeholder="如 scorers.py:amount_check，仅留痕便于追溯" />
+            <div class="page-sub">
+              服务端不执行任何用户代码。run 终态后由 SDK 拉取任务、本地执行 scorer 并回写：
+              <span class="mono">emonlens eval run --sdk-runner ./scorers.py</span>。
+              未回写的结果按 UNKNOWN 参与聚合，Gate 会因 SDK_EVALUATORS 检查项 BLOCKED。
             </div>
           </n-form-item>
         </template>
@@ -356,7 +375,8 @@ const typeOptions = [
   { label: 'EXPRESSION（表达式规则，零依赖）', value: 'EXPRESSION' },
   { label: 'REGEX（内容正则断言）', value: 'REGEX' },
   { label: 'LLM_JUDGE（模型评审）', value: 'LLM_JUDGE' },
-  { label: 'TRAJECTORY（工具轨迹确定性检查）', value: 'TRAJECTORY' }
+  { label: 'TRAJECTORY（工具轨迹确定性检查）', value: 'TRAJECTORY' },
+  { label: 'SDK（自定义 Python scorer，结果回写）', value: 'SDK' }
 ]
 const EXACT_MATCH_PRESET = 'reference-exact-match'
 const EXACT_MATCH_PASS_WHEN = 'reference_match.exact(candidate_output, expected_output)'
@@ -390,7 +410,8 @@ const typeHint = computed(() => ({
   EXPRESSION: '对 Trace 指标或数据集样本的候选/参考求值，零外部依赖；参考答案预设见下方选择',
   REGEX: '对采集的输入/输出/工具内容做正则断言，适合 PII 检查、关键词命中类规则',
   LLM_JUDGE: '把 Rubric、候选输出与参考答案交给大模型评审打分，适合开放性质量评估（需配置 LLM 端点）',
-  TRAJECTORY: '对工具调用序列做确定性检查（顺序/子集/禁用工具/步数/循环/参数），不调用 LLM；仅 TRACE 模式有工具证据'
+  TRAJECTORY: '对工具调用序列做确定性检查（顺序/子集/禁用工具/步数/循环/参数），不调用 LLM；仅 TRACE 模式有工具证据',
+  SDK: '判定逻辑在用户环境执行（Python @emonlens.scorer），结果经开放 API 回写；服务端不执行任何用户代码'
 }[createForm.type] || ''))
 
 function typeTag(t) {
@@ -401,6 +422,7 @@ function specPreview(r) {
   if (r.type === 'EXPRESSION') return s.passWhen || ''
   if (r.type === 'REGEX') return `${s.field || 'completion'}: /${s.pattern || ''}/ ${s.requireMatch === false ? '(命中即 FAIL)' : ''}`
   if (r.type === 'LLM_JUDGE') return s.rubric || ''
+  if (r.type === 'SDK') return '需要 ' + (s.requiredFields || []).join(', ') + (s.scorerRef ? ' · ' + s.scorerRef : '')
   return JSON.stringify(s)
 }
 
@@ -425,7 +447,7 @@ const columns = [
   { title: '状态', key: 'enabled', width: 60, render: (r) => h(NSwitch, { size: 'small', value: !!r.enabled, onUpdateValue: (v) => doToggle(r, v) }) },
   { title: '操作', key: 'ops', width: 190, render: (r) => [
       h(NButton, { size: 'tiny', style: 'margin-right:6px', onClick: () => openEdit(r) }, { default: () => '编辑' }),
-      h(NButton, { size: 'tiny', style: 'margin-right:6px', onClick: () => openTest(r) }, { default: () => '试跑' }),
+      h(NButton, { size: 'tiny', style: 'margin-right:6px', disabled: r.type === 'SDK', title: r.type === 'SDK' ? 'SDK 评测器在用户环境执行，无服务端试跑' : undefined, onClick: () => openTest(r) }, { default: () => '试跑' }),
       h(NButton, { size: 'tiny', style: 'margin-right:6px', onClick: () => openVersions(r) }, { default: () => '版本' }),
       h(NPopconfirm, { onPositiveClick: () => doDelete(r) }, {
         trigger: () => h(NButton, { size: 'tiny', type: 'error', quaternary: true }, { default: () => '删除' }),
@@ -502,6 +524,12 @@ function buildSpec() {
     const { type: _ignored, ...rules } = parsed
     return { ...rules, type: 'TRAJECTORY' }
   }
+  if (createForm.type === 'SDK') {
+    const spec = { type: 'SDK', requiredFields: createForm.requiredFieldsText.split(',')
+      .map((v) => v.trim()).filter(Boolean) }
+    if (createForm.sdkScorerRef.trim()) spec.scorerRef = createForm.sdkScorerRef.trim()
+    return spec
+  }
   const spec = { type: 'LLM_JUDGE', rubric: createForm.rubric, minScore: createForm.minScore,
            temperature: createForm.temperature,
            judgeModel: createForm.judgeModel.trim() || undefined,
@@ -541,7 +569,7 @@ function buildSpec() {
 
 function openCreate() {
   editing.value = null
-  Object.assign(createForm, { evaluatorKey: '', type: 'EXPRESSION', passWhen: 'error_count == 0', preset: '', field: 'completion', pattern: '', requireMatch: 'true', rubric: '', criteriaText: '', minScore: 6, temperature: 0, judgeModel: '', referenceRequired: false, qualityDimension: '', judgeMode: 'HOLISTIC', judgeTemplateKey: '', judgeTemplateVersion: null, requiredFieldsText: '', maxClaims: 20, minPassRatio: 0.8, claimsUnknownPolicy: 'BLOCK', requireEvidence: true, trajectorySpecText: '', llmPreset: '' })
+  Object.assign(createForm, { evaluatorKey: '', type: 'EXPRESSION', passWhen: 'error_count == 0', preset: '', field: 'completion', pattern: '', requireMatch: 'true', rubric: '', criteriaText: '', minScore: 6, temperature: 0, judgeModel: '', referenceRequired: false, qualityDimension: '', judgeMode: 'HOLISTIC', judgeTemplateKey: '', judgeTemplateVersion: null, requiredFieldsText: '', maxClaims: 20, minPassRatio: 0.8, claimsUnknownPolicy: 'BLOCK', requireEvidence: true, trajectorySpecText: '', llmPreset: '', sdkScorerRef: '' })
   showCreate.value = true
 }
 
@@ -571,7 +599,8 @@ function openEdit(r) {
     llmPreset: r.type === 'LLM_JUDGE' ? (s.preset || '') : '',
     trajectorySpecText: r.type === 'TRAJECTORY'
       ? JSON.stringify(Object.fromEntries(Object.entries(s).filter(([k]) => k !== 'type')), null, 2)
-      : ''
+      : '',
+    sdkScorerRef: s.scorerRef || ''
   })
   showCreate.value = true
 }

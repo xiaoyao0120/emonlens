@@ -1,7 +1,7 @@
 # EmonLens 常用命令（make <target>）
 SHELL := /bin/bash
 
-VERSION := 0.1.0
+VERSION := 0.2.0
 
 .PHONY: help ui build test sdk-test sdk-dist dist image image-tag image-offline release smoke verify version clean \
         up down logs ps

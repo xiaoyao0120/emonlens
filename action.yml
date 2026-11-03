@@ -1,0 +1,164 @@
+name: EmonLens Eval Gate
+description: >-
+  Run an EmonLens dataset evaluation, verify the Quality Gate conclusion, and render it
+  as an idempotent PR comment. Fails the job when the Gate is not a usable PASS.
+
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  host:
+    description: EmonLens base URL (e.g. https://emonlens.example.com)
+    required: true
+  api-token:
+    description: Open API token with eval:run / eval:read / score:read scopes
+    required: true
+  dataset:
+    description: Dataset id to evaluate
+    required: true
+  suite:
+    description: Immutable eval suite id (alternative to evaluators)
+    required: false
+    default: ""
+  evaluators:
+    description: Comma separated evaluator ids (alternative to suite)
+    required: false
+    default: ""
+  mode:
+    description: TRACE (score existing traces) or REPLAY (generate then score)
+    required: false
+    default: REPLAY
+  prompt-name:
+    description: Bind the run to this prompt name (R1-3)
+    required: false
+    default: ""
+  prompt-version:
+    description: Pin an explicit prompt version; empty resolves by prompt-label
+    required: false
+    default: ""
+  prompt-label:
+    description: Prompt label used when prompt-version is empty (default production server side)
+    required: false
+    default: ""
+  run-label:
+    description: Run label, e.g. baseline (leave empty for candidate runs)
+    required: false
+    default: ""
+  baseline-label:
+    description: Resolve this run label as the baseline and include the diff in the comment
+    required: false
+    default: baseline
+  comment:
+    description: Post / update the PR comment
+    required: false
+    default: "true"
+  github-token:
+    description: Token used to write the PR comment
+    required: false
+    default: ${{ github.token }}
+  timeout:
+    description: Seconds to wait for the run to reach a terminal state
+    required: false
+    default: "900"
+
+outputs:
+  run-id:
+    description: Dataset run id
+    value: ${{ steps.eval.outputs.run-id }}
+  gate-id:
+    description: Quality Gate id
+    value: ${{ steps.eval.outputs.gate-id }}
+  decision:
+    description: Gate decision (PASS / FAIL / BLOCKED)
+    value: ${{ steps.eval.outputs.decision }}
+  usable:
+    description: Whether the gate verification is usable (true / false)
+    value: ${{ steps.eval.outputs.usable }}
+  exit-code:
+    description: CLI exit code (0 PASS / 2 FAIL / 3 BLOCKED / 4 error / 5 timeout)
+    value: ${{ steps.eval.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.9"
+
+    - name: Install EmonLens SDK
+      shell: bash
+      run: |
+        python -m pip install --quiet --upgrade pip
+        python -m pip install --quiet "${{ github.action_path }}/emonlens-sdk-python"
+
+    - name: Run evaluation and verify the gate
+      id: eval
+      shell: bash
+      # 退出码不在这里判死：先把结论写进报告与 output，最后一步统一决定 job 结果，
+      # 这样即使 Gate 不通过，PR 评论与 outputs 仍然会被写出来。
+      continue-on-error: true
+      env:
+        EMONLENS_HOST: ${{ inputs.host }}
+        EMONLENS_API_TOKEN: ${{ inputs.api-token }}
+      run: |
+        set -uo pipefail
+        args=(--dataset "${{ inputs.dataset }}" --mode "${{ inputs.mode }}"
+              --wait --assert --report-json emonlens-report.json
+              --timeout "${{ inputs.timeout }}")
+        if [ -n "${{ inputs.suite }}" ]; then
+          args+=(--suite "${{ inputs.suite }}")
+        else
+          IFS=',' read -ra ids <<< "${{ inputs.evaluators }}"
+          for id in "${ids[@]}"; do
+            trimmed="$(echo "$id" | tr -d '[:space:]')"
+            [ -n "$trimmed" ] && args+=(--evaluator "$trimmed")
+          done
+        fi
+        [ -n "${{ inputs.prompt-name }}" ] && args+=(--prompt-name "${{ inputs.prompt-name }}")
+        [ -n "${{ inputs.prompt-version }}" ] && args+=(--prompt-version "${{ inputs.prompt-version }}")
+        [ -n "${{ inputs.prompt-label }}" ] && args+=(--prompt-label "${{ inputs.prompt-label }}")
+        [ -n "${{ inputs.run-label }}" ] && args+=(--run-label "${{ inputs.run-label }}")
+        [ -n "${{ inputs.baseline-label }}" ] && args+=(--baseline-label "${{ inputs.baseline-label }}")
+        # 提交号进快照，评论里能回答“哪次提交、按哪条基线放行”
+        [ -n "${GITHUB_SHA:-}" ] && args+=(--commit-sha "${GITHUB_SHA}")
+
+        emonlens eval run "${args[@]}"
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+
+        if [ -f emonlens-report.json ]; then
+          python -c 'import json; r = json.load(open("emonlens-report.json", encoding="utf-8")); print("run-id=" + (r.get("runId") or "")); print("gate-id=" + (r.get("gateId") or "")); print("decision=" + (r.get("decision") or "")); print("usable=" + ("true" if r.get("usable") else "false"))' >> "$GITHUB_OUTPUT"
+        fi
+        exit 0
+
+    - name: Render PR comment
+      if: ${{ inputs.comment == 'true' && always() }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_EVENT_PATH: ${{ github.event_path }}
+      run: |
+        set -euo pipefail
+        if [ ! -f emonlens-report.json ]; then
+          echo "no emonlens-report.json; skip comment"
+          exit 0
+        fi
+        # 同一条 PR 上只更新一条评论（隐藏 marker 定位），重复运行不刷屏
+        python -m emonlens.ci --report emonlens-report.json
+
+    - name: Enforce the gate conclusion
+      if: always()
+      shell: bash
+      run: |
+        code="${{ steps.eval.outputs.exit-code }}"
+        if [ -z "$code" ]; then
+          echo "::error::EmonLens evaluation did not produce an exit code"
+          exit 4
+        fi
+        if [ "$code" != "0" ]; then
+          echo "::error::EmonLens gate is not a usable PASS (exit=$code)"
+        fi
+        exit "$code"

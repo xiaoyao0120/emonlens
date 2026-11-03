@@ -3,6 +3,7 @@ package io.emonlens.server.api;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -50,6 +51,9 @@ public class PromptController {
     private final PromptMapper promptMapper;
     private final TraceSummaryMapper traceSummaryMapper;
     private final EvalResultMapper evalResultMapper;
+    private final io.emonlens.server.engine.prompt.PromptService promptService;
+    private final io.emonlens.server.storage.mapper.DatasetRunMapper datasetRunMapper;
+    private final io.emonlens.server.storage.mapper.QualityGateMapper qualityGateMapper;
 
     @Data
     public static class CreateRequest {
@@ -180,23 +184,70 @@ public class PromptController {
         return ApiResult.ok(versions.stream().map(this::toVO).collect(Collectors.toList()));
     }
 
-    /** 按标签解析（production / latest），供 Agent 运行时拉取 */
+    /** 按标签解析（production / latest），供 Agent 运行时拉取；每次解析留痕（谁取的、哪个版本） */
     @GetMapping("/{name}/resolve")
     @RequiresPermission(Permissions.PROMPT_QUERY)
     public ApiResult<Map<String, Object>> resolve(@PathVariable String name,
-                                                  @RequestParam(defaultValue = LABEL_PRODUCTION) String label) {
+                                                  @RequestParam(defaultValue = LABEL_PRODUCTION) String label,
+                                                  @RequestParam(required = false) String source) {
         String ws = CurrentContext.require().getWorkspaceId();
-        PromptEntity hit = promptMapper.selectList(Wrappers.<PromptEntity>lambdaQuery()
-                        .eq(PromptEntity::getWorkspaceId, ws)
-                        .eq(PromptEntity::getName, name)
-                        .orderByDesc(PromptEntity::getVersion))
-                .stream()
-                .filter(v -> labelsOf(v).contains(label)
-                        || (LABEL_LATEST.equals(label) && v.getVersion().equals(maxVersion(ws, name))))
-                .findFirst()
-                .orElseThrow(() -> new EmonLensException(ErrorCode.NOT_FOUND,
-                        "prompt not found: " + name + " @" + label));
+        PromptEntity hit = promptService.resolve(ws, name, label);
+        promptService.recordResolution(hit, label, source == null || source.isBlank()
+                ? io.emonlens.server.engine.prompt.PromptService.SOURCE_UI : source,
+                CurrentContext.require().getUsername());
         return ApiResult.ok(toVO(hit));
+    }
+
+    /**
+     * 从 prompt 版本反查评估证据（R1-3）：它被哪些 run 评过、Gate 结论是什么。
+     * 只返回元数据与结论，不含候选正文。
+     */
+    @GetMapping("/{name}/runs")
+    @RequiresPermission(Permissions.PROMPT_QUERY)
+    public ApiResult<List<Map<String, Object>>> runs(@PathVariable String name) {
+        String ws = CurrentContext.require().getWorkspaceId();
+        List<io.emonlens.server.storage.entity.DatasetRunEntity> runs = datasetRunMapper.selectList(
+                Wrappers.<io.emonlens.server.storage.entity.DatasetRunEntity>lambdaQuery()
+                        .eq(io.emonlens.server.storage.entity.DatasetRunEntity::getWorkspaceId, ws)
+                        .eq(io.emonlens.server.storage.entity.DatasetRunEntity::getPromptName, name)
+                        .orderByDesc(io.emonlens.server.storage.entity.DatasetRunEntity::getStartedAt));
+        Map<String, io.emonlens.server.storage.entity.QualityGateEntity> latestGate = new HashMap<>();
+        for (io.emonlens.server.storage.entity.DatasetRunEntity run : runs) {
+            io.emonlens.server.storage.entity.QualityGateEntity gate = qualityGateMapper.selectOne(
+                    Wrappers.<io.emonlens.server.storage.entity.QualityGateEntity>lambdaQuery()
+                            .eq(io.emonlens.server.storage.entity.QualityGateEntity::getRunId, run.getId())
+                            .orderByDesc(io.emonlens.server.storage.entity.QualityGateEntity::getCreatedAt)
+                            .orderByDesc(io.emonlens.server.storage.entity.QualityGateEntity::getId)
+                            .last("LIMIT 1"));
+            if (gate != null) {
+                latestGate.put(run.getId(), gate);
+            }
+        }
+        List<Map<String, Object>> rows = new java.util.ArrayList<>();
+        for (io.emonlens.server.storage.entity.DatasetRunEntity run : runs) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("runId", run.getId());
+            row.put("datasetId", run.getDatasetId());
+            row.put("promptName", run.getPromptName());
+            row.put("promptVersion", run.getPromptVersion());
+            row.put("promptLabel", run.getPromptLabel());
+            row.put("promptHash", run.getPromptHash());
+            row.put("runMode", run.getRunMode());
+            row.put("runLabel", run.getRunLabel());
+            row.put("commitSha", run.getCommitSha());
+            row.put("status", run.getStatus());
+            row.put("passCount", run.getPassCount());
+            row.put("failCount", run.getFailCount());
+            row.put("startedAt", run.getStartedAt());
+            row.put("finishedAt", run.getFinishedAt());
+            io.emonlens.server.storage.entity.QualityGateEntity gate = latestGate.get(run.getId());
+            row.put("gateDecision", gate == null ? null : gate.getDecision());
+            row.put("gateId", gate == null ? null : gate.getId());
+            row.put("gateValidUntil", gate == null ? null : gate.getValidUntil());
+            row.put("gateCoverage", gate == null ? null : gate.getCoverage());
+            rows.add(row);
+        }
+        return ApiResult.ok(rows);
     }
 
     /** 创建新版本：version 自动 +1；可同时打 production 标签（实现发布/回滚） */
@@ -227,10 +278,15 @@ public class PromptController {
         if (Boolean.TRUE.equals(request.getSetProduction()) && !labels.contains(LABEL_PRODUCTION)) {
             labels.add(LABEL_PRODUCTION);
         }
+        // label 语义收紧（R1-3）：production 同名唯一。先插入新版本再从旧版本摘除，
+        // 避免插入失败时把旧版本上的 production 一起弄丢。
         entity.setLabels(String.join(",", labels));
         entity.setCreatedBy(CurrentContext.require().getUsername());
         entity.setCreatedAt(LocalDateTime.now());
         promptMapper.insert(entity);
+        if (labels.contains(LABEL_PRODUCTION)) {
+            detachLabel(ws, entity.getName(), LABEL_PRODUCTION, nextVersion);
+        }
         return ApiResult.ok(toVO(entity));
     }
 
@@ -262,8 +318,23 @@ public class PromptController {
         return ApiResult.ok(toVO(target));
     }
 
-    private Integer maxVersion(String ws, String name) {
-        return promptMapper.selectList(Wrappers.<PromptEntity>lambdaQuery()
+    /** 把某个 label 从同名其它版本上摘除，保证 label 指向唯一（production 语义收紧）。 */
+    private void detachLabel(String ws, String name, String label, Integer keepVersion) {
+        for (PromptEntity v : promptMapper.selectList(Wrappers.<PromptEntity>lambdaQuery()
+                .eq(PromptEntity::getWorkspaceId, ws)
+                .eq(PromptEntity::getName, name))) {
+            if (v.getVersion().equals(keepVersion)) {
+                continue;
+            }
+            List<String> labels = new java.util.ArrayList<>(labelsOf(v));
+            if (labels.remove(label)) {
+                v.setLabels(String.join(",", labels));
+                promptMapper.updateById(v);
+            }
+        }
+    }
+
+    private Integer maxVersion(String ws, String name) {        return promptMapper.selectList(Wrappers.<PromptEntity>lambdaQuery()
                         .eq(PromptEntity::getWorkspaceId, ws)
                         .eq(PromptEntity::getName, name)
                         .orderByDesc(PromptEntity::getVersion)

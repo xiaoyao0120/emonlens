@@ -90,6 +90,21 @@ public class DatasetRunSnapshotService {
                             String requestedMode, String systemPrompt, String requestedModel,
                             Integer maxExternalCalls, Long maxTokens,
                             Map<String, Object> suiteSnapshot) {
+        return freeze(dataset, items, evaluators, revision, requestedMode, systemPrompt, requestedModel,
+                maxExternalCalls, maxTokens, suiteSnapshot, null, null);
+    }
+
+    /**
+     * @param promptRef 受理时解析好的 prompt 版本引用；进候选指纹，prompt 换版即指纹变化
+     * @param commitSha 触发本次 run 的提交号；只为可追溯，不改变判定口径
+     */
+    public FrozenRun freeze(DatasetEntity dataset, List<DatasetItemEntity> items,
+                            List<EvaluatorEntity> evaluators, DatasetRevisionEntity revision,
+                            String requestedMode, String systemPrompt, String requestedModel,
+                            Integer maxExternalCalls, Long maxTokens,
+                            Map<String, Object> suiteSnapshot,
+                            io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef,
+                            String commitSha) {
         String mode = MODE_REPLAY.equalsIgnoreCase(requestedMode) ? MODE_REPLAY : MODE_TRACE;
         int maxChars = properties.getDatasetRun().getMaxSnapshotChars();
         if (evaluators == null || evaluators.isEmpty()) {
@@ -174,8 +189,20 @@ public class DatasetRunSnapshotService {
         if (suiteSnapshot != null) {
             config.put("suite", suiteSnapshot);
         }
+        if (promptRef != null && promptRef.getName() != null) {
+            Map<String, Object> prompt = new LinkedHashMap<>();
+            prompt.put("name", promptRef.getName());
+            prompt.put("version", promptRef.getVersion());
+            prompt.put("label", promptRef.getLabel());
+            prompt.put("hash", promptRef.getHash());
+            config.put("promptRef", prompt);
+        }
+        if (commitSha != null && !commitSha.isBlank()) {
+            config.put("commitSha", commitSha.trim());
+        }
         config.put("candidateFingerprint", candidateFingerprint(revision, evaluatorSnapshots, mode,
-                systemPrompt, effectiveModel, suiteSnapshot, dataset.getDomainPackId()));
+                systemPrompt, effectiveModel, suiteSnapshot, dataset.getDomainPackId(),
+                promptRef, commitSha));
         frozen.setConfigSnapshot(config);
         return frozen;
     }
@@ -470,7 +497,9 @@ public class DatasetRunSnapshotService {
     private String candidateFingerprint(DatasetRevisionEntity revision,
                                         List<Map<String, Object>> evaluatorSnapshots,
                                         String mode, String systemPrompt, String effectiveModel,
-                                        Map<String, Object> suiteSnapshot, String domainPackId) {
+                                        Map<String, Object> suiteSnapshot, String domainPackId,
+                                        io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef,
+                                        String commitSha) {
         StringBuilder material = new StringBuilder();
         material.append(revision == null ? "" : revision.getManifestHash()).append('|')
                 .append(mode).append('|')
@@ -485,6 +514,13 @@ public class DatasetRunSnapshotService {
         if (domainPackId != null && !domainPackId.isBlank()) {
             material.append("|pack:").append(domainPackId);
         }
+        // prompt 版本进指纹：换 prompt 版本 / 换 production 指针，旧结论自然不可比。
+        if (promptRef != null && promptRef.getName() != null) {
+            material.append("|prompt:").append(promptRef.getName())
+                    .append(":v").append(promptRef.getVersion())
+                    .append(':').append(promptRef.getHash());
+        }
+        // 提交号只做可追溯，不进指纹：同配置不同提交不应被判为不同候选。
         return Sha256Utils.hash(material.toString());
     }
 

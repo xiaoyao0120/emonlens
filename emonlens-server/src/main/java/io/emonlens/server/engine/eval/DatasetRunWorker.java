@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -45,11 +46,15 @@ public class DatasetRunWorker {
     private final RunTokenBudgetStore tokenBudgetStore;
     private final EvalTaskService evalTaskService;
     private final EvalCacheService evalCacheService;
+    private final SdkEvalResultService sdkEvalResultService;
     private final ObjectMapper objectMapper;
     private final EmonLensProperties properties;
 
     private volatile boolean running = true;
     private final List<Thread> workers = new ArrayList<>();
+
+    /** SDK 宽限清理的扫描间隔：清理本身是轻查询，但不必每个轮询周期都跑 */
+    private static final long SDK_SWEEP_INTERVAL_MS = 60_000L;
 
     @PostConstruct
     public void start() {
@@ -81,9 +86,15 @@ public class DatasetRunWorker {
     }
 
     private void loop() {
+        long lastSdkSweep = 0;
         while (running) {
             try {
                 datasetRunService.recoverExpiredLeases();
+                long now = System.currentTimeMillis();
+                if (now - lastSdkSweep > SDK_SWEEP_INTERVAL_MS) {
+                    lastSdkSweep = now;
+                    sdkEvalResultService.recoverExpiredSdkTasks();
+                }
                 DatasetRunEntity run = datasetRunService.claimNextPending();
                 if (run != null) {
                     try {
@@ -195,7 +206,12 @@ public class DatasetRunWorker {
     private void executeItem(DatasetRunEntity run, DatasetRunItemEntity item, String mode,
                              List<EvaluatorEntity> evaluators, Map<String, Object> config,
                              Map<String, EvalTaskEntity> tasks) {
-        if (!evalTaskService.beginItem(tasks, item.getId())) {
+        // SDK 评估器由外部执行回写，服务端只跑其余类型；SDK 任务在账本里保持 PENDING，
+        // 其样本级结论先按 AWAITING_SDK_RESULTS 的 UNKNOWN 占位，回写后重聚合翻正。
+        List<EvaluatorEntity> serverEvaluators = evaluators.stream()
+                .filter(e -> !EvaluatorEntity.TYPE_SDK.equals(e.getType()))
+                .collect(java.util.stream.Collectors.toList());
+        if (!evalTaskService.beginItem(tasks, item.getId(), Set.of(EvaluatorEntity.TYPE_SDK))) {
             log.info("item tasks no longer runnable, skip item, run={} item={}", run.getId(), item.getId());
             return;
         }
@@ -205,7 +221,7 @@ public class DatasetRunWorker {
                     "样本快照无法解析", evaluators, 0, 0, null, null, null, null, null, tasks);
             return;
         }
-        EvaluationSample sample = sampleFrom(snapshot);
+        EvaluationSample sample = SampleSnapshots.from(snapshot);
         long start = System.currentTimeMillis();
         int generationCalls = 0;
         Integer generationPromptTokens = null;
@@ -277,7 +293,7 @@ public class DatasetRunWorker {
             int judgeCalls = 0;
             Integer judgePromptTokens = null;
             Integer judgeCompletionTokens = null;
-            for (EvaluatorEntity evaluator : evaluators) {
+            for (EvaluatorEntity evaluator : serverEvaluators) {
                 Map<String, Object> resultMap = new LinkedHashMap<>();
                 resultMap.put("evaluatorId", evaluator.getId());
                 resultMap.put("evaluatorKey", evaluator.getEvaluatorKey());
@@ -365,16 +381,20 @@ public class DatasetRunWorker {
                 }
                 evaluatorResults.add(resultMap);
             }
+            for (EvaluatorEntity evaluator : evaluators) {
+                if (EvaluatorEntity.TYPE_SDK.equals(evaluator.getType())) {
+                    evaluatorResults.add(awaitingSdkEntry(evaluator));
+                }
+            }
 
-            String aggregateLabel = aggregateLabel(evaluatorResults);
-            String aggregateReasonCode = aggregateReasonCode(evaluatorResults, aggregateLabel);
-            String aggregateReason = aggregateReason(evaluatorResults);
-            BigDecimal aggregateScore = averageScore(evaluatorResults);
+            String aggregateLabel = RunItemAggregator.aggregateLabel(evaluatorResults);
+            String aggregateReasonCode = RunItemAggregator.aggregateReasonCode(evaluatorResults, aggregateLabel);
+            String aggregateReason = RunItemAggregator.aggregateReason(evaluatorResults);
+            BigDecimal aggregateScore = RunItemAggregator.averageScore(evaluatorResults);
             long latencyMs = System.currentTimeMillis() - start;
 
             Map<String, Object> details = new LinkedHashMap<>();
-            details.put("status", EvaluatorEntity.LABEL_ERROR.equals(aggregateLabel) ? "ERROR"
-                    : EvaluatorEntity.LABEL_UNKNOWN.equals(aggregateLabel) ? "UNKNOWN" : "DONE");
+            details.put("status", RunItemAggregator.statusOf(aggregateLabel));
             details.put("reasonCode", aggregateReasonCode);
             details.put("reason", truncate(aggregateReason, 5000));
             details.put("reasonTruncated", aggregateReason.length() > 5000);
@@ -412,6 +432,21 @@ public class DatasetRunWorker {
         }
     }
 
+    /** SDK 评估器的样本级占位条目：结果回写前按 UNKNOWN 参与聚合，保持计数守恒。 */
+    private Map<String, Object> awaitingSdkEntry(EvaluatorEntity evaluator) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("evaluatorId", evaluator.getId());
+        entry.put("evaluatorKey", evaluator.getEvaluatorKey());
+        entry.put("evaluatorVersion", evaluator.getVersion());
+        entry.put("type", evaluator.getType());
+        entry.put("label", EvaluatorEntity.LABEL_UNKNOWN);
+        entry.put("score", null);
+        entry.put("reasonCode", "AWAITING_SDK_RESULTS");
+        entry.put("reason", "等待 SDK 评测结果回写");
+        entry.put("judgeCalled", false);
+        return entry;
+    }
+
     private void recordFailure(DatasetRunItemEntity item, String label, String reasonCode, String reason,
                                List<EvaluatorEntity> evaluators, int generationCalls, int judgeCalls,
                                EvaluationSample sample, String traceId, String sourceTraceId,
@@ -432,8 +467,7 @@ public class DatasetRunWorker {
             results.add(result);
         }
         Map<String, Object> details = new LinkedHashMap<>();
-        details.put("status", EvaluatorEntity.LABEL_ERROR.equals(label) ? "ERROR"
-                : EvaluatorEntity.LABEL_UNKNOWN.equals(label) ? "UNKNOWN" : "DONE");
+        details.put("status", RunItemAggregator.statusOf(label));
         details.put("reasonCode", reasonCode);
         details.put("reason", truncate(reason, 5000));
         details.put("evaluators", results);
@@ -487,103 +521,6 @@ public class DatasetRunWorker {
         item.setResultDetailsJson(toJson(details));
         item.setResultDetails(details);
         datasetRunItemMapper.updateById(item);
-    }
-
-    private String aggregateLabel(List<Map<String, Object>> results) {
-        if (results.isEmpty()) {
-            return EvaluatorEntity.LABEL_ERROR;
-        }
-        boolean error = false;
-        boolean unknown = false;
-        for (Map<String, Object> result : results) {
-            String label = asString(result.get("label"));
-            if (EvaluatorEntity.LABEL_FAIL.equals(label)) {
-                return EvaluatorEntity.LABEL_FAIL;
-            }
-            if (EvaluatorEntity.LABEL_ERROR.equals(label)) {
-                error = true;
-            } else if (!EvaluatorEntity.LABEL_PASS.equals(label)) {
-                unknown = true;
-            }
-        }
-        return error ? EvaluatorEntity.LABEL_ERROR
-                : unknown ? EvaluatorEntity.LABEL_UNKNOWN : EvaluatorEntity.LABEL_PASS;
-    }
-
-    private String aggregateReasonCode(List<Map<String, Object>> results, String aggregateLabel) {
-        for (Map<String, Object> result : results) {
-            if (aggregateLabel.equals(asString(result.get("label")))
-                    && result.get("reasonCode") != null) {
-                return asString(result.get("reasonCode"));
-            }
-        }
-        return EvaluatorEntity.LABEL_PASS.equals(aggregateLabel) ? "PASS" : "MULTI_EVALUATOR_UNKNOWN";
-    }
-
-    private String aggregateReason(List<Map<String, Object>> results) {
-        List<String> parts = new ArrayList<>();
-        for (Map<String, Object> result : results) {
-            String key = asString(result.get("evaluatorKey"));
-            String label = asString(result.get("label"));
-            String reason = asString(result.get("reason"));
-            parts.add("[" + key + "] " + label + (reason == null || reason.isBlank() ? "" : ": " + reason));
-        }
-        return String.join("; ", parts);
-    }
-
-    private BigDecimal averageScore(List<Map<String, Object>> results) {
-        double sum = 0;
-        int n = 0;
-        for (Map<String, Object> result : results) {
-            Object score = result.get("score");
-            if (score instanceof Number) {
-                sum += ((Number) score).doubleValue();
-                n++;
-            }
-        }
-        return n == 0 ? null : BigDecimal.valueOf(sum / n).setScale(2, java.math.RoundingMode.HALF_UP);
-    }
-
-    private EvaluationSample sampleFrom(Map<String, Object> snapshot) {
-        EvaluationSample sample = new EvaluationSample();
-        sample.setItemId(asString(snapshot.get("itemId")));
-        sample.setItemOrder(asInteger(snapshot.get("itemOrder")));
-        sample.setTraceId(asString(snapshot.get("traceId")));
-        sample.setSourceTraceId(asString(snapshot.get("sourceTraceId")));
-        sample.setAgentKey(asString(snapshot.get("agentKey")));
-        sample.setAgentVersion(asString(snapshot.get("agentVersion")));
-        sample.setInput(asString(snapshot.get("input")));
-        sample.setCandidateOutput(asString(snapshot.get("candidateOutput")));
-        sample.setExpectedOutput(asString(snapshot.get("expectedOutput")));
-        sample.setSchemaVersion(asInteger(snapshot.get("schemaVersion")));
-        sample.setCaseHash(asString(snapshot.get("caseHash")));
-        sample.setRetrievalContext(mapList(snapshot.get("retrievalContext")));
-        sample.setExpectedTools(mapList(snapshot.get("expectedTools")));
-        sample.setToolsCalled(mapList(snapshot.get("toolsCalled")));
-        sample.setTurns(mapList(snapshot.get("turns")));
-        Map<String, Object> expectations = asMap(snapshot.get("expectations"));
-        sample.setExpectations(expectations == null ? new LinkedHashMap<>() : expectations);
-        sample.setSpanCount(asInteger(snapshot.get("spanCount")));
-        sample.setErrorCount(asInteger(snapshot.get("errorCount")));
-        sample.setDurationMs(asLong(snapshot.get("durationMs")));
-        sample.setToolCalls(asLong(snapshot.get("toolCalls")));
-        sample.setLlmCalls(asLong(snapshot.get("llmCalls")));
-        sample.setTraceDigest(asString(snapshot.get("traceDigest")));
-        sample.setContents(stringMap(snapshot.get("contents")));
-        sample.setContentCaptureModes(stringMap(snapshot.get("contentCaptureModes")));
-        Map<String, Boolean> truncated = new LinkedHashMap<>();
-        Map<?, ?> rawTruncated = asMap(snapshot.get("contentTruncated"));
-        if (rawTruncated != null) {
-            for (Map.Entry<?, ?> e : rawTruncated.entrySet()) {
-                truncated.put(String.valueOf(e.getKey()), Boolean.TRUE.equals(e.getValue()));
-            }
-        }
-        sample.setContentTruncated(truncated);
-        sample.setContentStatus(asString(snapshot.get("contentStatus")));
-        sample.setContentStatusReason(asString(snapshot.get("contentStatusReason")));
-        Object complete = snapshot.get("candidateComplete");
-        sample.setCandidateComplete(complete instanceof Boolean ? (Boolean) complete : null);
-        return sample;
     }
 
     @SuppressWarnings("unchecked")
@@ -785,31 +722,6 @@ public class DatasetRunWorker {
     @SuppressWarnings("unchecked")
     private Map<String, Object> asMap(Object value) {
         return value instanceof Map ? (Map<String, Object>) value : null;
-    }
-
-    private List<Map<String, Object>> mapList(Object value) {
-        List<Map<String, Object>> result = new ArrayList<>();
-        if (!(value instanceof List)) {
-            return result;
-        }
-        for (Object item : (List<?>) value) {
-            Map<String, Object> map = asMap(item);
-            if (map != null) {
-                result.add(map);
-            }
-        }
-        return result;
-    }
-
-    private Map<String, String> stringMap(Object value) {
-        Map<String, String> result = new LinkedHashMap<>();
-        Map<?, ?> map = asMap(value);
-        if (map != null) {
-            for (Map.Entry<?, ?> e : map.entrySet()) {
-                result.put(String.valueOf(e.getKey()), e.getValue() == null ? null : String.valueOf(e.getValue()));
-            }
-        }
-        return result;
     }
 
     private String asString(Object value) {

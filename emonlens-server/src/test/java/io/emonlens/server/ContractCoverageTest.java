@@ -158,8 +158,11 @@ class ContractCoverageTest extends AbstractIntegrationTest {
                         throw new RuntimeException(e);
                     }
                 },
+                // 同一批 ingest 的两个 span 可能被微批切成两次落库：等两条都可见再断言，
+                // 否则会在“trace 已 COMPLETED 但 llm span 还没装配”时假失败（高负载下更常见）。
                 json -> readSafely(json).path("data").path("summary").path("status").asText()
-                        .equals("COMPLETED"),
+                        .equals("COMPLETED")
+                        && readSafely(json).path("data").path("spans").toString().contains("\"llm-1\""),
                 ASYNC_TIMEOUT_MS);
         JsonNode llmSpan = readSafely(detail).path("data").path("spans");
         assertThat(llmSpan.toString()).contains("\"cachedInputTokens\":640");

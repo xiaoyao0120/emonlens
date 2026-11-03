@@ -70,6 +70,7 @@ public class DatasetRunService {
     private final HttpLlmClient llmClient;
     private final DatasetRunCredentialStore credentialStore;
     private final EvalTaskService evalTaskService;
+    private final io.emonlens.server.engine.prompt.PromptService promptService;
     private final ObjectMapper objectMapper;
     private final EmonLensProperties properties;
     private final PlatformTransactionManager transactionManager;
@@ -116,6 +117,25 @@ public class DatasetRunService {
                                String candidateLabel, String candidateFingerprint,
                                Integer maxExternalCalls, Long maxTokens, String reviewMode,
                                String suiteId, String requestKey, java.math.BigDecimal maxCost) {
+        return accept(workspaceId, datasetId, evaluatorIds, revisionId, mode, systemPrompt, model,
+                candidateLabel, candidateFingerprint, maxExternalCalls, maxTokens, reviewMode,
+                suiteId, requestKey, maxCost, null, null, null);
+    }
+
+    /**
+     * R1-3：受理时额外绑定 prompt 版本引用、基线标签与提交号。
+     *
+     * @param promptRef name 必填；version 为空时按 label（缺省 production）解析
+     * @param runLabel  CI 基线标签（如 baseline），仅供按标签取最近 run
+     * @param commitSha 触发提交号，进快照做可追溯，不进候选指纹
+     */
+    public AcceptResult accept(String workspaceId, String datasetId, List<String> evaluatorIds,
+                               String revisionId, String mode, String systemPrompt, String model,
+                               String candidateLabel, String candidateFingerprint,
+                               Integer maxExternalCalls, Long maxTokens, String reviewMode,
+                               String suiteId, String requestKey, java.math.BigDecimal maxCost,
+                               io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef,
+                               String runLabel, String commitSha) {
         Integer budget = normalizeMaxExternalCalls(maxExternalCalls);
         Long tokenBudget = normalizeMaxTokens(maxTokens);
         String normalizedReviewMode = normalizeReviewMode(reviewMode);
@@ -151,9 +171,32 @@ public class DatasetRunService {
         String runMode = DatasetRunSnapshotService.MODE_REPLAY.equalsIgnoreCase(mode)
                 ? DatasetRunSnapshotService.MODE_REPLAY : DatasetRunSnapshotService.MODE_TRACE;
         String revisionKey = revisionId == null ? "" : revisionId.trim();
+        // prompt 引用在受理时解析成不可变版本：之后 production 指针再移动也不影响本 run 的语义，
+        // 但 Gate verification 会把“指针已移动”判成结论过期（见 QualityGateService）。
+        io.emonlens.server.engine.prompt.PromptService.PromptRef resolvedPrompt = null;
+        io.emonlens.server.storage.entity.PromptEntity resolvedPromptEntity = null;
+        if (promptRef != null && promptRef.getName() != null && !promptRef.getName().isBlank()) {
+            String promptName = promptRef.getName().trim();
+            resolvedPromptEntity = promptService.resolve(workspaceId, promptName,
+                    promptRef.getVersion(), promptRef.getLabel());
+            resolvedPrompt = promptService.refOf(resolvedPromptEntity,
+                    promptRef.getLabel() == null || promptRef.getLabel().isBlank()
+                            ? (promptRef.getVersion() == null
+                                ? io.emonlens.server.engine.prompt.PromptService.LABEL_PRODUCTION
+                                : io.emonlens.server.engine.prompt.PromptService.LABEL_LATEST)
+                            : promptRef.getLabel().trim());
+        }
+        String normalizedRunLabel = runLabel == null || runLabel.isBlank() ? null : runLabel.trim();
+        if (normalizedRunLabel != null && normalizedRunLabel.length() > 64) {
+            throw new EmonLensException(ErrorCode.BAD_REQUEST, "runLabel 不能超过 64 字符");
+        }
+        String normalizedCommit = commitSha == null || commitSha.isBlank() ? null : commitSha.trim();
+        if (normalizedCommit != null && normalizedCommit.length() > 64) {
+            throw new EmonLensException(ErrorCode.BAD_REQUEST, "commitSha 不能超过 64 字符");
+        }
         String requestHash = requestHash(datasetId, ids, revisionKey, runMode, systemPrompt, model,
                 candidateLabel, candidateFingerprint, budget, tokenBudget, normalizedReviewMode,
-                suiteKey);
+                suiteKey, resolvedPrompt, normalizedRunLabel, normalizedCommit);
 
         synchronized (acceptLock) {
             DatasetRunEntity existing = datasetRunMapper.selectOne(Wrappers.<DatasetRunEntity>lambdaQuery()
@@ -196,7 +239,7 @@ public class DatasetRunService {
 
             DatasetRunSnapshotService.FrozenRun frozen = snapshotService.freeze(
                     dataset, items, evaluators, revision, runMode, systemPrompt, model, budget,
-                    tokenBudget, suiteSnapshot);
+                    tokenBudget, suiteSnapshot, resolvedPrompt, normalizedCommit);
             frozen.getConfigSnapshot().put("reviewMode", normalizedReviewMode);
             if (maxCost != null) {
                 frozen.getConfigSnapshot().put("maxCost", maxCost);
@@ -204,6 +247,16 @@ public class DatasetRunService {
             frozen.getConfigSnapshot().put("domainPackId", dataset.getDomainPackId());
             // 受理时固定当次有效凭据/配置（仅内存，不落库）；执行期间不再读取默认模型
             SysSettingService.EvalLlm credentials = llmClient.effectiveConfig();
+
+            // CI 基线标签唯一：新 run 拿走的标签必须从同数据集其它 run 上摘掉，
+            // 否则“按 label 取最近一条”之外还会存在第二条自称基线的 run。
+            if (normalizedRunLabel != null) {
+                datasetRunMapper.update(null, Wrappers.<DatasetRunEntity>lambdaUpdate()
+                        .eq(DatasetRunEntity::getWorkspaceId, workspaceId)
+                        .eq(DatasetRunEntity::getDatasetId, datasetId)
+                        .eq(DatasetRunEntity::getRunLabel, normalizedRunLabel)
+                        .set(DatasetRunEntity::getRunLabel, null));
+            }
 
             DatasetRunEntity run = new DatasetRunEntity();
             run.setWorkspaceId(workspaceId);
@@ -225,6 +278,14 @@ public class DatasetRunService {
             run.setRunMode(runMode);
             run.setModel(DatasetRunSnapshotService.MODE_REPLAY.equals(runMode)
                     ? (String) ((Map<?, ?>) frozen.getConfigSnapshot().get("generation")).get("model") : null);
+            if (resolvedPrompt != null) {
+                run.setPromptName(resolvedPrompt.getName());
+                run.setPromptVersion(resolvedPrompt.getVersion());
+                run.setPromptLabel(resolvedPrompt.getLabel());
+                run.setPromptHash(resolvedPrompt.getHash());
+            }
+            run.setRunLabel(normalizedRunLabel);
+            run.setCommitSha(normalizedCommit);
             run.setStatus(DatasetRunEntity.STATUS_PENDING);
             run.setItemCount(frozen.getItems().size());
             run.setExternalCallsReserved(0);
@@ -278,6 +339,10 @@ public class DatasetRunService {
             } catch (RuntimeException e) {
                 credentialStore.remove(run.getId());
                 throw e;
+            }
+            if (resolvedPromptEntity != null) {
+                promptService.recordResolution(resolvedPromptEntity, resolvedPrompt.getLabel(),
+                        io.emonlens.server.engine.prompt.PromptService.SOURCE_RUN, null);
             }
             return accepted(run, true);
         }
@@ -763,6 +828,22 @@ public class DatasetRunService {
     public List<DatasetRunItemEntity> itemsOf(String runId) {
         return datasetRunItemMapper.selectList(Wrappers.<DatasetRunItemEntity>lambdaQuery()
                 .eq(DatasetRunItemEntity::getRunId, runId));
+    }
+
+    public DatasetRunItemEntity itemOf(String runId, String runItemId) {
+        return datasetRunItemMapper.selectOne(Wrappers.<DatasetRunItemEntity>lambdaQuery()
+                .eq(DatasetRunItemEntity::getRunId, runId)
+                .eq(DatasetRunItemEntity::getId, runItemId));
+    }
+
+    /** 回写路径的样本更新：run 已终态，无租约竞争，直接写。 */
+    public void saveItem(DatasetRunItemEntity item) {
+        datasetRunItemMapper.updateById(item);
+    }
+
+    /** 宽限清理等后台路径用：run 可能已被清理，缺失返回 null 而不是抛错。 */
+    public DatasetRunEntity requireRunQuietly(String runId) {
+        return datasetRunMapper.selectById(runId);
     }
 
     /**
@@ -1617,6 +1698,29 @@ public class DatasetRunService {
                 run.getId(), status, pass, fail, unknown, error, incomplete);
     }
 
+    /**
+     * 终端 run 上重算 pass/fail 计数：SDK 结果回写改变样本判定后刷新 run 汇总。
+     * 与 finish 的租约条件更新不同，这里只作用于终端 run，允许重复执行。
+     */
+    public void refreshTerminalCounters(String runId) {
+        DatasetRunEntity run = datasetRunMapper.selectById(runId);
+        if (run == null || isActiveStatus(run.getStatus())) {
+            return;
+        }
+        int pass = 0, fail = 0;
+        for (DatasetRunItemEntity item : itemsOf(runId)) {
+            if (EvaluatorEntity.LABEL_PASS.equals(item.getLabel())) {
+                pass++;
+            } else if (EvaluatorEntity.LABEL_FAIL.equals(item.getLabel())) {
+                fail++;
+            }
+        }
+        datasetRunMapper.update(null, Wrappers.<DatasetRunEntity>lambdaUpdate()
+                .eq(DatasetRunEntity::getId, runId)
+                .set(DatasetRunEntity::getPassCount, pass)
+                .set(DatasetRunEntity::getFailCount, fail));
+    }
+
     /** 预算只接受正整数；留空表示不限制，保持旧调用兼容。 */
     private long optionalLong(Object value) {
         if (value instanceof Number) {
@@ -1728,6 +1832,57 @@ public class DatasetRunService {
         return ordered;
     }
 
+    /**
+     * 给 run 打 CI 基线标签（R1-4）：同一数据集内同标签只指向一个 run，其余自动摘除，
+     * 这样“基线是哪一条”永远没有二义性。置空即摘除本 run 的标签。
+     */
+    public Map<String, Object> labelRun(String workspaceId, String datasetId, String runId, String runLabel) {
+        DatasetRunEntity run = requireRun(workspaceId, datasetId, runId);
+        String label = runLabel == null || runLabel.isBlank() ? null : runLabel.trim();
+        if (label != null && label.length() > 64) {
+            throw new EmonLensException(ErrorCode.BAD_REQUEST, "runLabel 不能超过 64 字符");
+        }
+        List<String> cleared = new ArrayList<>();
+        if (label != null) {
+            List<DatasetRunEntity> holders = datasetRunMapper.selectList(
+                    Wrappers.<DatasetRunEntity>lambdaQuery()
+                            .eq(DatasetRunEntity::getDatasetId, datasetId)
+                            .eq(DatasetRunEntity::getRunLabel, label));
+            for (DatasetRunEntity holder : holders) {
+                if (!holder.getId().equals(run.getId())) {
+                    datasetRunMapper.update(null, Wrappers.<DatasetRunEntity>lambdaUpdate()
+                            .eq(DatasetRunEntity::getId, holder.getId())
+                            .set(DatasetRunEntity::getRunLabel, null));
+                    cleared.add(holder.getId());
+                }
+            }
+        }
+        datasetRunMapper.update(null, Wrappers.<DatasetRunEntity>lambdaUpdate()
+                .eq(DatasetRunEntity::getId, run.getId())
+                .set(DatasetRunEntity::getRunLabel, label));
+        run.setRunLabel(label);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("runId", run.getId());
+        result.put("datasetId", datasetId);
+        result.put("runLabel", label);
+        result.put("clearedRunIds", cleared);
+        return result;
+    }
+
+    /** 按标签取该数据集最近一条 run（CI 基线解析）；没有返回 null。 */
+    public DatasetRunEntity latestByLabel(String workspaceId, String datasetId, String runLabel) {
+        if (runLabel == null || runLabel.isBlank()) {
+            return null;
+        }
+        return datasetRunMapper.selectList(Wrappers.<DatasetRunEntity>lambdaQuery()
+                        .eq(DatasetRunEntity::getWorkspaceId, workspaceId)
+                        .eq(DatasetRunEntity::getDatasetId, datasetId)
+                        .eq(DatasetRunEntity::getRunLabel, runLabel.trim())
+                        .orderByDesc(DatasetRunEntity::getStartedAt)
+                        .last("LIMIT 1"))
+                .stream().findFirst().orElse(null);
+    }
+
     private DatasetEntity requireDataset(String workspaceId, String datasetId) {
         DatasetEntity dataset = datasetMapper.selectById(datasetId);
         if (dataset == null || !workspaceId.equals(dataset.getWorkspaceId())) {
@@ -1740,7 +1895,9 @@ public class DatasetRunService {
                                String mode, String systemPrompt, String model,
                                String candidateLabel, String candidateFingerprint,
                                Integer maxExternalCalls, Long maxTokens, String reviewMode,
-                               String suiteId) {
+                               String suiteId,
+                               io.emonlens.server.engine.prompt.PromptService.PromptRef promptRef,
+                               String runLabel, String commitSha) {
         Map<String, Object> canonical = new TreeMap<>();
         canonical.put("datasetId", datasetId);
         canonical.put("evaluatorIds", evaluatorIds);
@@ -1762,6 +1919,17 @@ public class DatasetRunService {
         }
         if (suiteId != null && !suiteId.isEmpty()) {
             canonical.put("suiteId", suiteId);
+        }
+        // 只有显式声明才进 hash：保持历史（无 prompt / 无标签 / 无提交号）幂等键继续命中。
+        if (promptRef != null && promptRef.getName() != null) {
+            canonical.put("promptName", promptRef.getName());
+            canonical.put("promptVersion", promptRef.getVersion());
+        }
+        if (runLabel != null && !runLabel.isEmpty()) {
+            canonical.put("runLabel", runLabel);
+        }
+        if (commitSha != null && !commitSha.isEmpty()) {
+            canonical.put("commitSha", commitSha);
         }
         return Sha256Utils.hash(toJson(canonical));
     }

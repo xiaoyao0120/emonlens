@@ -132,12 +132,14 @@ Trace 证据
    - run 终态、未执行样本、样本计数守恒；
    - 覆盖率、FAIL/ERROR/UNKNOWN 预算；
    - revision/version、sampleSetHash、候选指纹绑定；
+   - prompt 版本绑定（`PROMPT_BINDING`；绑定 production 时要求指针未移动，见 3.12）；
    - Judge 校准（含 Judge 的 run）；
    - 成本预算（如设置）。
 5. **不要只看历史 `decision=PASS`。** 通过 `GET /api/v1/quality-gates/{id}/verification` 校验：
    - 是否过期；
    - run 是否仍 COMPLETED；
    - 候选指纹是否变化；
+   - **绑定的 prompt 版本是否仍是当前 production**（`PROMPT_PRODUCTION_MOVED` / `PROMPT_PRODUCTION_MISSING`）；
    - 是否被同 run 更新的 Gate 取代；
    - 校准是否仍有效。
 6. CI/CD 只消费 `verification.usable=true` 且 `decision=PASS` 的 Gate；`BLOCKED`、超时、未知枚举一律不放行。
@@ -184,6 +186,18 @@ Trace 证据
 4. Bootstrap 稳定性、CV 折数、语义去重都是可选高级项；不确定时保持默认。
 5. 候选状态为 PROPOSED / REJECTED；人工批准只改状态，不自动发布规则、不改 Gate。
 
+### 3.12 Prompt 版本绑定与矩阵升格（0.2.0）
+
+1. 想让结论回答「上线的是哪个 prompt」，提交 run 时带 `promptName`（可加 `promptVersion` 或 `promptLabel`）：
+   解析出的 `(name, version, hash)` 会写进 run 与冻结快照，并进入候选指纹。
+2. 用矩阵实验调参时（构建 →「调试与提示词」→「矩阵实验」），矩阵本身**不是**准入证据；对要放行的那一列点「升格为正式实验」，
+   平台按该列冻结的 prompt 版本与生成参数创建 dataset run，随后照常生成 Gate。
+3. **Gate 会因 prompt 改版而失效**：把 `production` 指向新版本后，旧 Gate 的 `verification.usable` 立刻变为 `false`，
+   原因形如 `PROMPT_PRODUCTION_MOVED:support-assistant:v3->v4`。CI 必须重新跑评测，不能继续用旧结论。
+4. 想回答「这个 prompt 版本被哪些 run 评过、结论如何」，用 `GET /api/v1/prompts/{name}/runs`，
+   或在「提示词 → 版本抽屉 → 评估证据」查看（含 runId、prompt 版本、Gate 决策、通过/失败、run 标签、提交号）。
+5. CI 基线：给某条 run 打 `baseline` 标签（同一数据集内唯一），后续 PR 的评测会与它做逐样本 diff。
+
 ---
 
 ## 4. 口径速查
@@ -216,7 +230,14 @@ A：V2 评分只在五维证据全部 COMPLETE 时给总分；缺失维度显示
 A：不是。业务证据独立展示，不改变离线 Gate；发布仍以 Gate 和 verification 为准。
 
 **Q：旧 Gate 还能用吗？**
-A：用 `GET /api/v1/quality-gates/{id}/verification` 校验；过期、run 状态变化、候选指纹变化、被新 Gate 取代、校准失效都会让 `usable=false`。
+A：用 `GET /api/v1/quality-gates/{id}/verification` 校验；过期、run 状态变化、候选指纹变化、prompt 版本被移出 production、被新 Gate 取代、校准失效都会让 `usable=false`。
+
+**Q：prompt 改了，之前的 Gate 为什么失效？**
+A：run 绑定了 `(prompt name, version, hash)`。把 `production` 指向新版本后，被评的那一版已经不是上线版本，结论不再成立，
+verification 返回 `PROMPT_PRODUCTION_MOVED`。要么用新版本重跑评测，要么把 production 指回被评版本（回滚）。
+
+**Q：矩阵跑出来效果更好，能直接当放行依据吗？**
+A：不能。矩阵是试跑产物（无候选指纹、不进 Gate）。请用「升格为正式实验」把它变成 dataset run，再按 Gate 流程放行。
 
 ---
 
@@ -239,6 +260,29 @@ curl "$EMONLENS/api/v1/open/quality-gates/$GATE_ID/verification" -H "X-Api-Token
 ```
 
 只有 `decision=PASS` 且 `usable=true` 才继续发布；否则停止并展示检查项。CI 日志只记录 runId/gateId 和摘要，不输出正文、密钥或个人信息。
+
+### 6.1 用官方 Action 一行接入（0.2.0）
+
+不想自己写脚本时，直接用仓库根目录的 composite Action（示例工作流 `docs/examples/github-action-eval.yml`）：
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+steps:
+  - uses: actions/checkout@v4
+  - uses: your-org/emonlens@v0.2.0
+    with:
+      host: ${{ vars.EMONLENS_HOST }}
+      api-token: ${{ secrets.EMONLENS_API_TOKEN }}
+      dataset: ${{ vars.EMONLENS_DATASET_ID }}
+      evaluators: ${{ vars.EMONLENS_EVALUATOR_IDS }}
+      prompt-name: support-assistant
+      baseline-label: baseline
+```
+
+它会：跑评测 → 校验 Gate → 把「通过率 / 覆盖率 / Gate 决策 / 未通过检查项 / 与基线 diff」写成一条幂等更新的 PR 评论 →
+用 CLI 退出码决定 job 成败（Gate 非 PASS 时 job 失败）。评论不含样本正文。
 
 ---
 
@@ -297,6 +341,9 @@ export EMONLENS_API_TOKEN="<开放 API Token，含 eval:run / eval:read / score:
 emonlens eval run --dataset <datasetId> --suite <suiteId> --mode TRACE --wait --assert
 # 校验历史 Gate（CI 必须消费 usable + decision）
 emonlens gate check --gate-id <gateId> --json
+
+# SDK 评测器：run 终态后执行本地 scorer 并回写；Token 需 eval:run/eval:read（正文另需 eval:content）
+emonlens eval run --dataset <datasetId> --evaluator <evaluatorId> --wait   --sdk-runner ./my_scorers.py --assert
 ```
 
 Python：

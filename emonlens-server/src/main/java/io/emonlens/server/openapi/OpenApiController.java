@@ -27,6 +27,7 @@ import io.emonlens.common.Sha256Utils;
 import io.emonlens.server.audit.AuditService;
 import io.emonlens.server.engine.monitor.MonitorService;
 import io.emonlens.server.engine.eval.DatasetRunService;
+import io.emonlens.server.engine.eval.SdkEvalResultService;
 import io.emonlens.server.engine.gate.QualityGateService;
 import io.emonlens.server.engine.score.TrustScoreService;
 import io.emonlens.server.storage.entity.AccessTokenEntity;
@@ -53,6 +54,8 @@ public class OpenApiController {
     private final TrustScoreService trustScoreService;
     private final QualityGateService qualityGateService;
     private final DatasetRunService datasetRunService;
+    private final SdkEvalResultService sdkEvalResultService;
+    private final io.emonlens.server.engine.eval.DatasetRunComparisonService datasetRunComparisonService;
     private final AuditService auditService;
 
     private AccessTokenEntity verify(String token, String scope) {
@@ -66,19 +69,28 @@ public class OpenApiController {
             throw new EmonLensException(ErrorCode.UNAUTHORIZED, "invalid api token");
         }
         // 兼容历史签发的 scope 串：trim 去空格，避免 "score:read, monitors:write" 第二个 scope 误判 403
-        Set<String> scopes = new HashSet<>();
-        for (String s : entity.getScopes().split(",")) {
-            String trimmed = s.trim();
-            if (!trimmed.isEmpty()) {
-                scopes.add(trimmed);
-            }
-        }
-        if (!scopes.contains(scope)) {
+        if (!parseScopes(entity).contains(scope)) {
             throw new EmonLensException(ErrorCode.FORBIDDEN, "token missing scope: " + scope);
         }
         entity.setLastUsedAt(LocalDateTime.now());
         accessTokenMapper.updateById(entity);
         return entity;
+    }
+
+    /** token 是否拥有指定 scope；用于单请求的多 scope 组合（eval:read + eval:content）。 */
+    private boolean hasScope(AccessTokenEntity entity, String scope) {
+        return parseScopes(entity).contains(scope);
+    }
+
+    private Set<String> parseScopes(AccessTokenEntity entity) {
+        Set<String> scopes = new HashSet<>();
+        for (String s : String.valueOf(entity.getScopes()).split(",")) {
+            String trimmed = s.trim();
+            if (!trimmed.isEmpty()) {
+                scopes.add(trimmed);
+            }
+        }
+        return scopes;
     }
 
     @GetMapping("/score/agents/{agentKey}")
@@ -152,6 +164,13 @@ public class OpenApiController {
         private Integer maxExternalCalls;
         private Long maxTokens;
         private String reviewMode;
+        /** R1-3：绑定 prompt 版本（version 优先；只给 name 时按 label，缺省 production） */
+        private String promptName;
+        private Integer promptVersion;
+        private String promptLabel;
+        /** R1-4：CI 基线标签与提交号 */
+        private String runLabel;
+        private String commitSha;
     }
 
     /** SDK/CI 提交一次数据集评测；只返回 run 标识与状态，不返回样本正文。 */
@@ -182,7 +201,12 @@ public class OpenApiController {
                 body.getRevisionId(), body.getMode(), body.getSystemPrompt(), body.getModel(),
                 body.getCandidateLabel(), body.getCandidateFingerprint(),
                 body.getMaxExternalCalls(), body.getMaxTokens(), body.getReviewMode(),
-                body.getSuiteId(), idempotencyKey, null);
+                body.getSuiteId(), idempotencyKey, null,
+                body.getPromptName() == null || body.getPromptName().isBlank() ? null
+                        : new io.emonlens.server.engine.prompt.PromptService.PromptRef(
+                                body.getPromptName().trim(), body.getPromptVersion(),
+                                body.getPromptLabel(), null),
+                body.getRunLabel(), body.getCommitSha());
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("runId", result.getRun().getId());
         payload.put("status", result.getRun().getStatus());
@@ -199,10 +223,64 @@ public class OpenApiController {
                 .body(ApiResult.ok(payload));
     }
 
+    /**
+     * CI 基线解析（R1-4）：按 runLabel 取该数据集最近一条 run。
+     * 返回 run 概要 + 最新 Gate，不含样本正文；没有基线时返回 resolved=false。
+     */
+    @GetMapping("/eval-runs")
+    public ApiResult<Map<String, Object>> listEvalRuns(
+            @RequestHeader(value = "X-Api-Token", required = false) String token,
+            @RequestParam String datasetId,
+            @RequestParam(defaultValue = "baseline") String label) {
+        AccessTokenEntity tokenEntity = verify(token, "eval:read");
+        DatasetRunEntity run = datasetRunService.latestByLabel(
+                tokenEntity.getWorkspaceId(), datasetId, label);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("resolved", run != null);
+        payload.put("label", label);
+        payload.put("datasetId", datasetId);
+        if (run == null) {
+            return ApiResult.ok(payload);
+        }
+        datasetRunService.enrich(run, datasetRunService.itemsOf(run.getId()), false, false);
+        run.setConfigSnapshot(null);
+        payload.put("run", run);
+        payload.put("gate", qualityGateService.latest(tokenEntity.getWorkspaceId(), run.getId()));
+        return ApiResult.ok(payload);
+    }
+
+    /**
+     * CI 基线与候选的 diff 摘要（R1-4）：只回传计数与 transition，不回传样本正文。
+     * 基线未指定时按 runLabel 解析该数据集最近一条基线 run。
+     */
+    @GetMapping("/eval-runs/{runId}/diff")
+    public ApiResult<Map<String, Object>> diffAgainstBaseline(
+            @RequestHeader(value = "X-Api-Token", required = false) String token,
+            @PathVariable String runId,
+            @RequestParam(required = false) String baselineRunId,
+            @RequestParam(defaultValue = "baseline") String label) {
+        AccessTokenEntity tokenEntity = verify(token, "eval:read");
+        DatasetRunEntity candidate = datasetRunService.requireRun(tokenEntity.getWorkspaceId(), runId);
+        DatasetRunEntity baseline = baselineRunId == null || baselineRunId.isBlank()
+                ? datasetRunService.latestByLabel(tokenEntity.getWorkspaceId(),
+                        candidate.getDatasetId(), label)
+                : datasetRunService.requireRun(tokenEntity.getWorkspaceId(), baselineRunId);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("baselineResolved", baseline != null);
+        payload.put("label", label);
+        if (baseline == null) {
+            return ApiResult.ok(payload);
+        }
+        payload.put("baselineRunId", baseline.getId());
+        payload.put("diff", datasetRunComparisonService.compare(baseline,
+                datasetRunService.itemsOf(baseline.getId()), candidate,
+                datasetRunService.itemsOf(candidate.getId()), false));
+        return ApiResult.ok(payload);
+    }
+
     /** SDK/CI 查询 run 状态与最新 Gate；不返回样本正文。 */
     @GetMapping("/eval-runs/{runId}")
-    public ApiResult<Map<String, Object>> getEvalRun(
-            @RequestHeader(value = "X-Api-Token", required = false) String token,
+    public ApiResult<Map<String, Object>> getEvalRun(            @RequestHeader(value = "X-Api-Token", required = false) String token,
             @PathVariable String runId) {
         AccessTokenEntity tokenEntity = verify(token, "eval:read");
         DatasetRunEntity run = datasetRunService.requireRun(tokenEntity.getWorkspaceId(), runId);
@@ -224,6 +302,50 @@ public class OpenApiController {
         private Integer maxFail;
         private Integer maxUnknown;
         private Integer validHours;
+    }
+
+    /**
+     * SDK 评测器任务清单与样本载荷。eval:read 即可拉取；样本正文（input/expected/candidate 等）
+     * 需要额外 eval:content scope，否则只回传 hash 与状态——与导出脱敏口径一致。
+     */
+    @GetMapping("/eval-runs/{runId}/sdk-tasks")
+    public ApiResult<Map<String, Object>> sdkTasks(
+            @RequestHeader(value = "X-Api-Token", required = false) String token,
+            @PathVariable String runId) {
+        AccessTokenEntity tokenEntity = verify(token, "eval:read");
+        boolean contentAllowed = hasScope(tokenEntity, "eval:content");
+        Map<String, Object> payload = sdkEvalResultService.sdkTasks(
+                tokenEntity.getWorkspaceId(), runId, contentAllowed);
+        return ApiResult.ok(payload);
+    }
+
+    @Data
+    public static class SdkResultsBody {
+        private List<SdkEvalResultService.SdkResultInput> results;
+    }
+
+    /** SDK 评测结果回写：按任务账本终态机落账，幂等重复返回 DUPLICATE，冲突返回 CONFLICT。 */
+    @PostMapping("/eval-runs/{runId}/results")
+    public ApiResult<Map<String, Object>> pushSdkResults(
+            @RequestHeader(value = "X-Api-Token", required = false) String token,
+            @PathVariable String runId,
+            @RequestBody SdkResultsBody body) {
+        AccessTokenEntity tokenEntity = verify(token, "eval:run");
+        List<SdkEvalResultService.SdkResultInput> results = body == null ? null : body.getResults();
+        Map<String, Object> payload = sdkEvalResultService.pushResults(
+                tokenEntity.getWorkspaceId(), runId, results);
+        long applied = 0;
+        if (payload.get("results") instanceof List) {
+            for (Object raw : (List<?>) payload.get("results")) {
+                if (raw instanceof Map && "APPLIED".equals(((Map<?, ?>) raw).get("outcome"))) {
+                    applied++;
+                }
+            }
+        }
+        auditService.recordSystem(tokenEntity.getWorkspaceId(),
+                "open-api:" + tokenEntity.getName(), "open.eval_run.sdk_results", "dataset_run", runId,
+                Map.of("submitted", results == null ? 0 : results.size(), "applied", applied));
+        return ApiResult.ok(payload);
     }
 
     /** 外部系统注册规则（如 CI 流水线自动挂门禁）；workspace 随 token */

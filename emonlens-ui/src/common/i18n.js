@@ -44,7 +44,7 @@ const DICTS = {
       SUCCEEDED: '成功', UNKNOWN: '无法判定', FAILED: '失败'
     },
     evaluatorType: {
-      EXPRESSION: '表达式规则', REGEX: '正则断言', LLM_JUDGE: '模型评审', TRAJECTORY: '工具轨迹'
+      EXPRESSION: '表达式规则', REGEX: '正则断言', LLM_JUDGE: '模型评审', TRAJECTORY: '工具轨迹', SDK: 'SDK 评测器'
     },
     runStatus: {
       COMPLETED: '执行完成', PARTIAL_FAILED: '部分失败', FAILED: '执行失败',
@@ -117,7 +117,7 @@ const DICTS = {
       SUCCEEDED: 'Succeeded', UNKNOWN: 'Unknown', FAILED: 'Failed'
     },
     evaluatorType: {
-      EXPRESSION: 'Expression', REGEX: 'Regex', LLM_JUDGE: 'LLM judge', TRAJECTORY: 'Trajectory'
+      EXPRESSION: 'Expression', REGEX: 'Regex', LLM_JUDGE: 'LLM judge', TRAJECTORY: 'Trajectory', SDK: 'SDK evaluator'
     },
     runStatus: {
       COMPLETED: 'Completed', PARTIAL_FAILED: 'Partial failed', FAILED: 'Failed',

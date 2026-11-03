@@ -1254,3 +1254,186 @@ CREATE TABLE IF NOT EXISTS et_pairwise_human_review (
     UNIQUE KEY uk_pairwise_human_review (evaluation_id, item_id, reviewer),
     KEY idx_pairwise_human_review_eval (evaluation_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- ============ R1-2 Playground 矩阵实验（列 × 样本网格，试跑产物） ============
+CREATE TABLE IF NOT EXISTS et_playground_matrix (
+    id                VARCHAR(36) PRIMARY KEY,
+    workspace_id      VARCHAR(64) NOT NULL,
+    request_key       VARCHAR(128) NOT NULL,
+    request_hash      CHAR(64) NOT NULL,
+    dataset_id        VARCHAR(36) NOT NULL,
+    dataset_revision_id VARCHAR(36),
+    name              VARCHAR(128),
+    status            VARCHAR(16) NOT NULL,
+    columns_json      MEDIUMTEXT NOT NULL,
+    estimate_json     MEDIUMTEXT,
+    evaluator_ids_json MEDIUMTEXT,
+    item_count        INT NOT NULL DEFAULT 0,
+    cell_count        INT NOT NULL DEFAULT 0,
+    completed_cells   INT NOT NULL DEFAULT 0,
+    failed_cells      INT NOT NULL DEFAULT 0,
+    prompt_tokens     BIGINT NOT NULL DEFAULT 0,
+    completion_tokens BIGINT NOT NULL DEFAULT 0,
+    cost              DECIMAL(18,6),
+    currency          VARCHAR(8),
+    unpriced_models   VARCHAR(512),
+    error             VARCHAR(1000),
+    created_by        VARCHAR(64),
+    created_at        DATETIME(3) NOT NULL,
+    started_at        DATETIME(3),
+    finished_at       DATETIME(3),
+    UNIQUE KEY uk_playground_matrix_request (workspace_id, request_key),
+    KEY idx_playground_matrix_created (workspace_id, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+CREATE TABLE IF NOT EXISTS et_playground_cell (
+    id                VARCHAR(36) PRIMARY KEY,
+    workspace_id      VARCHAR(64) NOT NULL,
+    matrix_id         VARCHAR(36) NOT NULL,
+    column_key        VARCHAR(64) NOT NULL,
+    item_id           VARCHAR(36) NOT NULL,
+    item_order        INT NOT NULL DEFAULT 0,
+    status            VARCHAR(16) NOT NULL,
+    output            MEDIUMTEXT,
+    output_hash       CHAR(64),
+    rendered_prompt   MEDIUMTEXT,
+    input_text        MEDIUMTEXT,
+    expected_text     MEDIUMTEXT,
+    error             VARCHAR(1000),
+    prompt_tokens     INT,
+    completion_tokens INT,
+    latency_ms        INT,
+    cost              DECIMAL(18,6),
+    scores_json       MEDIUMTEXT,
+    aggregate_label   VARCHAR(16),
+    score             DECIMAL(8,4),
+    created_at        DATETIME(3) NOT NULL,
+    finished_at       DATETIME(3),
+    UNIQUE KEY uk_playground_cell (matrix_id, column_key, item_id),
+    KEY idx_playground_cell_matrix (matrix_id, column_key, item_order)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+CREATE TABLE IF NOT EXISTS et_playground_diff (
+    id                  VARCHAR(36) PRIMARY KEY,
+    workspace_id        VARCHAR(64) NOT NULL,
+    matrix_id           VARCHAR(36) NOT NULL,
+    base_column         VARCHAR(64) NOT NULL,
+    target_column       VARCHAR(64) NOT NULL,
+    protocol_version    VARCHAR(32) NOT NULL,
+    judge_models_json   TEXT,
+    position_randomized TINYINT(1),
+    position_seed       BIGINT,
+    item_count          INT NOT NULL DEFAULT 0,
+    same_count          INT NOT NULL DEFAULT 0,
+    changed_count       INT NOT NULL DEFAULT 0,
+    improved_count      INT NOT NULL DEFAULT 0,
+    regressed_count     INT NOT NULL DEFAULT 0,
+    tradeoff_count      INT NOT NULL DEFAULT 0,
+    tie_count           INT NOT NULL DEFAULT 0,
+    unknown_count       INT NOT NULL DEFAULT 0,
+    status              VARCHAR(16) NOT NULL,
+    created_by          VARCHAR(64),
+    created_at          DATETIME(3) NOT NULL,
+    KEY idx_playground_diff_matrix (matrix_id, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+CREATE TABLE IF NOT EXISTS et_playground_diff_item (
+    id              VARCHAR(36) PRIMARY KEY,
+    workspace_id    VARCHAR(64) NOT NULL,
+    diff_id         VARCHAR(36) NOT NULL,
+    item_id         VARCHAR(36) NOT NULL,
+    deterministic   VARCHAR(16) NOT NULL,
+    preference      VARCHAR(16) NOT NULL,
+    reason_code     VARCHAR(64),
+    reason          VARCHAR(512),
+    score_delta_json TEXT,
+    calls_json      MEDIUMTEXT,
+    UNIQUE KEY uk_playground_diff_item (diff_id, item_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- ============ R1-3 Prompt 版本 × 实验打通 / R1-4 CI 基线 ============
+ALTER TABLE et_dataset_run ADD COLUMN prompt_name VARCHAR(128);
+ALTER TABLE et_dataset_run ADD COLUMN prompt_version INT;
+ALTER TABLE et_dataset_run ADD COLUMN prompt_label VARCHAR(32);
+ALTER TABLE et_dataset_run ADD COLUMN prompt_hash CHAR(64);
+ALTER TABLE et_dataset_run ADD COLUMN run_label VARCHAR(64);
+ALTER TABLE et_dataset_run ADD COLUMN commit_sha VARCHAR(64);
+CREATE INDEX idx_dataset_run_label ON et_dataset_run (workspace_id, dataset_id, run_label);
+
+CREATE TABLE IF NOT EXISTS et_prompt_resolution (
+    id            VARCHAR(36) PRIMARY KEY,
+    workspace_id  VARCHAR(64) NOT NULL,
+    name          VARCHAR(128) NOT NULL,
+    label         VARCHAR(32) NOT NULL,
+    version       INT NOT NULL,
+    prompt_hash   CHAR(64),
+    source        VARCHAR(32),
+    requested_by  VARCHAR(64),
+    created_at    DATETIME(3) NOT NULL,
+    KEY idx_prompt_resolution_name (workspace_id, name, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- ============ R2-1 评估规则 v2（scope / filter / 回溯） ============
+CREATE TABLE IF NOT EXISTS et_eval_rule (
+    id                VARCHAR(36) PRIMARY KEY,
+    workspace_id      VARCHAR(64) NOT NULL,
+    rule_key          VARCHAR(100) NOT NULL,
+    name              VARCHAR(200),
+    enabled           TINYINT(1) NOT NULL DEFAULT 1,
+    scope             VARCHAR(16) NOT NULL DEFAULT 'TRACE',
+    filters_json      TEXT,
+    evaluator_ids_json TEXT NOT NULL,
+    sample_rate       DOUBLE NOT NULL DEFAULT 1.0,
+    error_forced      TINYINT(1) NOT NULL DEFAULT 1,
+    max_per_hour      INT NOT NULL DEFAULT 0,
+    session_idle_minutes INT NOT NULL DEFAULT 5,
+    priority          INT NOT NULL DEFAULT 100,
+    created_by        VARCHAR(64),
+    created_at        DATETIME(3) NOT NULL,
+    updated_at        DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_eval_rule (workspace_id, rule_key),
+    KEY idx_eval_rule_scope (workspace_id, enabled, scope)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+CREATE TABLE IF NOT EXISTS et_eval_rule_hit (
+    id            VARCHAR(36) PRIMARY KEY,
+    workspace_id  VARCHAR(64) NOT NULL,
+    rule_key      VARCHAR(100) NOT NULL,
+    scope         VARCHAR(16) NOT NULL,
+    subject_id    VARCHAR(64) NOT NULL,
+    decision      VARCHAR(24) NOT NULL,
+    eval_count    INT NOT NULL DEFAULT 0,
+    detail        VARCHAR(500),
+    created_at    DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_eval_rule_hit (rule_key, subject_id),
+    KEY idx_eval_rule_hit_budget (rule_key, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+CREATE TABLE IF NOT EXISTS et_eval_rewind_job (
+    id                VARCHAR(36) PRIMARY KEY,
+    workspace_id      VARCHAR(64) NOT NULL,
+    request_key       VARCHAR(128) NOT NULL,
+    rule_key          VARCHAR(100) NOT NULL,
+    filter_json       TEXT,
+    status            VARCHAR(16) NOT NULL,
+    rate_per_minute   INT NOT NULL DEFAULT 60,
+    total             INT NOT NULL DEFAULT 0,
+    processed         INT NOT NULL DEFAULT 0,
+    evaluated         INT NOT NULL DEFAULT 0,
+    deduped           INT NOT NULL DEFAULT 0,
+    failed            INT NOT NULL DEFAULT 0,
+    cursor_start_time DATETIME(3),
+    cursor_trace_id   VARCHAR(64),
+    error             VARCHAR(1000),
+    created_by        VARCHAR(64),
+    created_at        DATETIME(3) NOT NULL,
+    started_at        DATETIME(3),
+    finished_at       DATETIME(3),
+    UNIQUE KEY uk_eval_rewind_request (workspace_id, request_key),
+    KEY idx_eval_rewind_status (workspace_id, status, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+ALTER TABLE et_eval_result ADD COLUMN scope VARCHAR(16);
+ALTER TABLE et_eval_result ADD COLUMN session_id VARCHAR(64);
+ALTER TABLE et_eval_result ADD COLUMN rule_key VARCHAR(100);
+CREATE INDEX idx_eval_result_scope ON et_eval_result (workspace_id, scope, evaluator_key, created_at);

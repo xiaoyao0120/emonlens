@@ -164,7 +164,37 @@ public class DatasetRunComparisonService {
         payload.put("fixes", compatible ? fixes : List.of());
         payload.put("items", compatible ? diffs : List.of());
         payload.put("contentRestricted", !contentAllowed);
+        // R1-3：prompt 版本不同时仍可比（这正是替换 prompt 的目的），但结论只能说明相对差异，
+        // 不能当作“同一 prompt 的回归”。降级提示与不可比原因分开表达。
+        payload.put("promptComparison", promptComparison(baseline, candidate));
         return payload;
+    }
+
+    private Map<String, Object> promptComparison(DatasetRunEntity baseline, DatasetRunEntity candidate) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("baseline", promptRef(baseline));
+        result.put("candidate", promptRef(candidate));
+        boolean baseBound = baseline.getPromptName() != null;
+        boolean candBound = candidate.getPromptName() != null;
+        boolean changed = baseBound != candBound
+                || (baseBound && (!Objects.equals(baseline.getPromptName(), candidate.getPromptName())
+                    || !Objects.equals(baseline.getPromptVersion(), candidate.getPromptVersion())
+                    || !Objects.equals(baseline.getPromptHash(), candidate.getPromptHash())));
+        result.put("changed", changed);
+        result.put("bound", baseBound && candBound);
+        if (changed) {
+            result.put("note", "两次 run 绑定的 prompt 版本不同：结论只说明相对差异，不能当作同一 prompt 的回归证据");
+        }
+        return result;
+    }
+
+    private Map<String, Object> promptRef(DatasetRunEntity run) {
+        Map<String, Object> ref = new LinkedHashMap<>();
+        ref.put("name", run.getPromptName());
+        ref.put("version", run.getPromptVersion());
+        ref.put("label", run.getPromptLabel());
+        ref.put("hash", run.getPromptHash());
+        return ref;
     }
 
     private Map<String, Object> emptySummary(boolean compatible) {
@@ -201,6 +231,12 @@ public class DatasetRunComparisonService {
         m.put("passRate", run.getPassRate());
         m.put("coverage", run.getCoverage());
         m.put("itemCount", run.getItemCount());
+        m.put("promptName", run.getPromptName());
+        m.put("promptVersion", run.getPromptVersion());
+        m.put("promptLabel", run.getPromptLabel());
+        m.put("promptHash", run.getPromptHash());
+        m.put("runLabel", run.getRunLabel());
+        m.put("commitSha", run.getCommitSha());
         return m;
     }
 

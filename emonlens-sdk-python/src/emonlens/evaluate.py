@@ -91,6 +91,11 @@ def evaluate(
     max_external_calls: Optional[int] = None,
     max_tokens: Optional[int] = None,
     review_mode: Optional[str] = None,
+    prompt_name: Optional[str] = None,
+    prompt_version: Optional[int] = None,
+    prompt_label: Optional[str] = None,
+    run_label: Optional[str] = None,
+    commit_sha: Optional[str] = None,
     wait: bool = True,
     timeout: float = 900.0,
     poll_interval: float = DEFAULT_POLL_SECONDS,
@@ -98,11 +103,18 @@ def evaluate(
     host: Optional[str] = None,
     api_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """提交一次数据集评测；wait=True 时轮询到终态并返回 run + gate。"""
+    """提交一次数据集评测；wait=True 时轮询到终态并返回 run + gate。
+
+    prompt_name/prompt_version/prompt_label（R1-3）把 run 绑定到不可变的 prompt 版本，
+    该引用进候选指纹，并在 Gate verification 里随 production 指针移动一起失效。
+    run_label/commit_sha（R1-4）用于 CI 基线解析与提交回溯。
+    """
     if not dataset_id:
         raise EmonLensError("dataset_id is required")
     if not suite_id and not evaluator_ids:
         raise EmonLensError("suite_id or evaluator_ids is required")
+    if prompt_version is not None and not prompt_name:
+        raise EmonLensError("prompt_version requires prompt_name")
 
     body: Dict[str, Any] = {"datasetId": dataset_id, "mode": mode or "TRACE"}
     if suite_id:
@@ -117,6 +129,11 @@ def evaluate(
         ("maxExternalCalls", max_external_calls),
         ("maxTokens", max_tokens),
         ("reviewMode", review_mode),
+        ("promptName", prompt_name),
+        ("promptVersion", prompt_version),
+        ("promptLabel", prompt_label),
+        ("runLabel", run_label),
+        ("commitSha", commit_sha),
     ):
         if value is not None:
             body[key] = value
@@ -219,6 +236,46 @@ def gate_check(gate_id: str, host: Optional[str] = None,
     token = _token(api_token)
     return _request("GET", base + "/api/v1/open/quality-gates/"
                     + urllib.parse.quote(gate_id) + "/verification", token)
+
+
+def get_run(run_id: str, host: Optional[str] = None,
+            api_token: Optional[str] = None) -> Dict[str, Any]:
+    """读取 run 状态与最新 Gate（不返回样本正文）。"""
+    if not run_id:
+        raise EmonLensError("run_id is required")
+    base = _host(host)
+    token = _token(api_token)
+    return _request("GET", base + "/api/v1/open/eval-runs/" + urllib.parse.quote(run_id), token)
+
+
+def baseline_run(dataset_id: str, label: str = "baseline", host: Optional[str] = None,
+                 api_token: Optional[str] = None) -> Dict[str, Any]:
+    """解析 CI 基线（R1-4）：按 runLabel 取该数据集最近一条 run + 最新 Gate。
+
+    返回 {"resolved": bool, "run": {...}, "gate": {...}}；没有基线时 resolved=False，
+    由调用方决定是“跳过基线对比”还是“失败”，SDK 不替用户猜。
+    """
+    if not dataset_id:
+        raise EmonLensError("dataset_id is required")
+    base = _host(host)
+    token = _token(api_token)
+    query = urllib.parse.urlencode({"datasetId": dataset_id, "label": label or "baseline"})
+    return _request("GET", base + "/api/v1/open/eval-runs?" + query, token)
+
+
+def run_diff(run_id: str, baseline_run_id: Optional[str] = None, label: str = "baseline",
+             host: Optional[str] = None, api_token: Optional[str] = None) -> Dict[str, Any]:
+    """候选与基线的 diff 摘要（不含样本正文）。"""
+    if not run_id:
+        raise EmonLensError("run_id is required")
+    base = _host(host)
+    token = _token(api_token)
+    params = {"label": label or "baseline"}
+    if baseline_run_id:
+        params["baselineRunId"] = baseline_run_id
+    url = (base + "/api/v1/open/eval-runs/" + urllib.parse.quote(run_id)
+           + "/diff?" + urllib.parse.urlencode(params))
+    return _request("GET", url, token)
 
 
 def _short(text: str, limit: int = 500) -> str:

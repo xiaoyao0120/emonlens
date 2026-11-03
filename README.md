@@ -50,7 +50,8 @@ EmonLens 是一个**开源、可自托管**的 AI Agent 可信观测平台。它
 - **评测与准入闭环** —— 质量总览；数据集 revision 与样本用途/风险/切分；可深链的运行报告；Judge 人工盲审校准；Pairwise 成对偏好；Gate `PASS / FAIL / BLOCKED` 与 `verification.usable`；质量案例回归闭环；Domain Pack；外部业务实验证据。
 - **信任评分** —— performance / behavior / output / security / context 五维，按权重做**几何平均**（任一维塌陷都会显著拉低总分）；存在 CRITICAL Finding 时状态直接判为 CRITICAL；每次评分留存快照。
 - **告警闭环** —— Finding 按指纹归并为 Incident，`OPEN → ACKNOWLEDGED → RESOLVED` 状态机；邮件与 Webhook 双通道，Webhook 带 HMAC-SHA256 签名；事件表原子认领、退避重试、死信可人工重投。
-- **Prompt 与 Playground** —— 版本管理、`production` / `latest` 标签、行级 diff、版本用量统计；Playground 支持 A/B 双跑、数据集批量试跑、一键存为提示词。
+- **Prompt 与 Playground** —— 版本管理、`production` / `latest` 标签（production 同名唯一）、行级 diff、版本用量统计、每次 resolve 留痕；Playground 支持 A/B 双跑、数据集批量试跑、一键存为提示词，以及**矩阵实验**（数据集 × prompt 版本 × 模型，启动前成本预估硬确认、网格并发、逐格评估、网格 CSV、逐样本 Diff 给出改进/退步/有得有失）；矩阵列可一键**升格为正式实验**并在 run 上绑定 prompt 版本。
+- **CI 门禁** —— 官方 composite Action（`action.yml`）：跑评测 + 校验 Gate + 把结论与基线 diff 幂等回写成 PR 评论；`baseline` 运行标签与 `commitSha` 让「哪次提交、按哪条基线放行」可查。
 - **平台能力** —— 工作空间隔离、27 个权限串（3 套预设角色）、操作审计、开放 API（`X-Api-Token` + scope）、数据保留策略、运行时配置。
 
 ## 🚀 快速开始
@@ -173,8 +174,10 @@ overall = performance^0.25 × behavior^0.25 × output^0.30 × security^0.10 × c
 | 自托管 | ✅ 单 jar / Compose | ✅ | 企业版 |
 | 服务端技术栈 | Java 11 + Spring Boot + MySQL（span 可选 StarRocks） | TypeScript + ClickHouse | 托管服务 |
 | Trace / 会话 / 成本 | ✅ | ✅ | ✅ |
-| Prompt 管理 / Playground | ✅ | ✅ | ✅ |
+| Prompt 管理 / Playground | ✅ 版本 + label + resolve 留痕 | ✅ | ✅ |
+| Playground 矩阵 + Diff | ✅ | ⚠️ 跑实验 | ⚠️ Playground Evaluate |
 | 评估 / 数据集实验 | ✅ 4 类评估器 + claim 判分 | ✅ | ✅ |
+| CI 门禁（Action + PR 评论） | ✅ Gate + verification 口径 | — | ⚠️ recipes |
 | 行为循环 / 轨迹越界检测 | ✅ 内置 | 需自定义 | 需自定义 |
 | 五维信任分 | ✅ | — | — |
 | Incident 状态机 | ✅ | — | — |
@@ -192,8 +195,8 @@ EmonLens 在 Trace、Prompt、评估、数据集这些基础能力上参考了�
 | 形态 | 命令 / 产物 | 适用 |
 | --- | --- | --- |
 | Docker Compose | `docker compose up -d --build` | 单机标准交付，自带 MySQL |
-| tar.gz 分发件 | `make dist` → `emonlens-dist/target/emonlens-0.1.0-bin.tar.gz` | 不能跑 Docker 的服务器，自备 MySQL 8.0 |
-| 单 jar | `make build` → `emonlens-server/target/emonlens-server-0.1.0.jar` | 自有调度 / 容器平台，自行管理进程 |
+| tar.gz 分发件 | `make dist` → `emonlens-dist/target/emonlens-0.2.0-bin.tar.gz` | 不能跑 Docker 的服务器，自备 MySQL 8.0 |
+| 单 jar | `make build` → `emonlens-server/target/emonlens-server-0.2.0.jar` | 自有调度 / 容器平台，自行管理进程 |
 | 离线镜像 | `make build && make image-offline` | 构建机无法访问 Maven/npm 仓库 |
 
 生产部署前请过一遍[部署手册](docs/EmonLens部署运维手册.md)的安全基线：
@@ -238,7 +241,7 @@ make build
 # 发布分发件（fat jar + 启停脚本 + SQL + 配置样例 + SDK + 文档）
 make dist
 
-# Python SDK：80 个测试
+# Python SDK：109 个测试
 make sdk-test
 
 # 对运行中的实例做黑盒验收

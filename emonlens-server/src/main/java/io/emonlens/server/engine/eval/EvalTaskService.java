@@ -144,6 +144,7 @@ public class EvalTaskService {
         task.setItemOrder(itemOrder);
         task.setEvaluatorId(asString(snapshot.get("id")));
         task.setEvaluatorKey(asString(snapshot.get("key")));
+        task.setEvaluatorType(asString(snapshot.get("type")));
         task.setEvaluatorVersion(asInt(snapshot.get("version"), 1));
         task.setEvaluatorOrder(evaluatorOrder);
         task.setEvaluatorFingerprint(asString(snapshot.get("fingerprint")));
@@ -229,18 +230,28 @@ public class EvalTaskService {
         return result;
     }
 
+    public EvalTaskEntity reload(String taskId) {
+        return taskId == null ? null : evalTaskMapper.selectById(taskId);
+    }
+
     /**
      * 样本开始执行前认领该样本的全部任务：PENDING→RUNNING。这样取消只收掉尚未开始的样本，
      * 已开始生成/评审的样本仍能写入迟到结果；若全部任务已被取消则返回 false，调用方应跳过该样本。
+     * deferredTypes 中的评估器类型不认领（SDK 任务由外部回写，保持 PENDING 直到结果到达）。
      */
-    public boolean beginItem(Map<String, EvalTaskEntity> tasks, String runItemId) {
+    public boolean beginItem(Map<String, EvalTaskEntity> tasks, String runItemId,
+                             Set<String> deferredTypes) {
         if (tasks == null || tasks.isEmpty() || runItemId == null) {
             return true;
         }
+        Set<String> deferred = deferredTypes == null ? Set.of() : deferredTypes;
         int total = 0;
         int claimed = 0;
         for (EvalTaskEntity task : tasks.values()) {
             if (!runItemId.equals(task.getRunItemId())) {
+                continue;
+            }
+            if (deferred.contains(task.getEvaluatorType())) {
                 continue;
             }
             total++;
@@ -456,29 +467,29 @@ public class EvalTaskService {
         }
     }
 
-    /** 取消 run：只收敛未开始的任务；正在执行的任务等 worker 的迟到结果自行落终态。 */
+    /** 取消 run：包括尚未回写的 SDK 任务（用户显式取消优先于一切外部等待）。 */
     public void cancelOpenTasks(String runId, String reasonCode, String reason) {
         updateOpenTasks(runId, EvalTaskEntity.STATUS_CANCELLED, List.of(EvalTaskEntity.STATUS_PENDING),
-                reasonCode, reason);
+                reasonCode, reason, true);
     }
 
     /** 中断/租约过期：worker 已不可信，PENDING 与 RUNNING 都收敛，禁止迟到结果覆盖。 */
     public void interruptOpenTasks(String runId, String reasonCode, String reason) {
         updateOpenTasks(runId, EvalTaskEntity.STATUS_SKIPPED,
                 List.of(EvalTaskEntity.STATUS_PENDING, EvalTaskEntity.STATUS_RUNNING),
-                reasonCode, reason);
+                reasonCode, reason, false);
     }
 
     public void skipPendingTasks(String runId, String reasonCode, String reason) {
         updateOpenTasks(runId, EvalTaskEntity.STATUS_SKIPPED, List.of(EvalTaskEntity.STATUS_PENDING),
-                reasonCode, reason);
+                reasonCode, reason, false);
     }
 
-    /** run 正常收口时兜底：仍未形成终态的任务标 SKIPPED，避免账本悬挂。 */
+    /** run 正常收口时兜底：仍未形成终态的服务端任务标 SKIPPED；SDK 任务留给外部回写或宽限清理。 */
     public void finalizeOpenTasks(String runId) {
         updateOpenTasks(runId, EvalTaskEntity.STATUS_SKIPPED,
                 List.of(EvalTaskEntity.STATUS_PENDING, EvalTaskEntity.STATUS_RUNNING),
-                "RUN_FINISHED_WITHOUT_RESULT", "run 已收口，该任务没有形成终态");
+                "RUN_FINISHED_WITHOUT_RESULT", "run 已收口，该任务没有形成终态", false);
     }
 
     /** 终端 run 上超过宽限期仍未收敛的任务；供 worker 轮询兜底，避免 RUNNING 永久悬挂。 */
@@ -491,6 +502,9 @@ public class EvalTaskService {
                 .apply("((execution_status = 'PENDING' AND created_at < {0})"
                         + " OR (execution_status = 'RUNNING'"
                         + " AND (started_at IS NULL OR started_at < {0})))", cutoff)
+                // SDK 任务的结果在 run 终态后仍允许回写，由 SDK 专属宽限清理收敛
+                .and(w -> w.isNull(EvalTaskEntity::getEvaluatorType)
+                        .or().ne(EvalTaskEntity::getEvaluatorType, EvaluatorEntity.TYPE_SDK))
                 .orderByAsc(EvalTaskEntity::getCreatedAt)
                 .last("LIMIT " + size));
         return open.stream().map(EvalTaskEntity::getRunId).distinct()
@@ -501,26 +515,40 @@ public class EvalTaskService {
     public void settleTerminalRunTasks(String runId, String runStatus) {
         if (DatasetRunEntity.STATUS_CANCELLED.equals(runStatus)) {
             updateOpenTasks(runId, EvalTaskEntity.STATUS_CANCELLED,
-                    List.of(EvalTaskEntity.STATUS_PENDING), "CANCELLED", "运行已取消，任务未执行");
+                    List.of(EvalTaskEntity.STATUS_PENDING), "CANCELLED", "运行已取消，任务未执行", true);
             updateOpenTasks(runId, EvalTaskEntity.STATUS_SKIPPED,
                     List.of(EvalTaskEntity.STATUS_RUNNING), "RUN_CANCELLED_TASK_ORPHANED",
-                    "运行取消后 worker 未回写终态，任务按中断收敛");
+                    "运行取消后 worker 未回写终态，任务按中断收敛", true);
         } else {
             updateOpenTasks(runId, EvalTaskEntity.STATUS_SKIPPED,
                     List.of(EvalTaskEntity.STATUS_PENDING, EvalTaskEntity.STATUS_RUNNING),
-                    "RUN_TERMINAL_TASK_ORPHANED", "run 已结束但任务未形成终态，按中断收敛");
+                    "RUN_TERMINAL_TASK_ORPHANED", "run 已结束但任务未形成终态，按中断收敛", false);
         }
     }
 
     private void updateOpenTasks(String runId, String status, List<String> fromStatuses,
                                  String reasonCode, String reason) {
+        updateOpenTasks(runId, status, fromStatuses, reasonCode, reason, false);
+    }
+
+    /**
+     * @param includeSdk false 时跳过 SDK 任务：它们的结果由外部回写，只有显式取消和
+     *                   SDK 宽限清理可以收敛，服务端执行生命周期不得扫掉。
+     */
+    private void updateOpenTasks(String runId, String status, List<String> fromStatuses,
+                                 String reasonCode, String reason, boolean includeSdk) {
         if (runId == null) {
             return;
         }
         try {
-            evalTaskMapper.update(null, Wrappers.<EvalTaskEntity>lambdaUpdate()
+            var wrapper = Wrappers.<EvalTaskEntity>lambdaUpdate()
                     .eq(EvalTaskEntity::getRunId, runId)
-                    .in(EvalTaskEntity::getExecutionStatus, fromStatuses)
+                    .in(EvalTaskEntity::getExecutionStatus, fromStatuses);
+            if (!includeSdk) {
+                wrapper.and(w -> w.isNull(EvalTaskEntity::getEvaluatorType)
+                        .or().ne(EvalTaskEntity::getEvaluatorType, EvaluatorEntity.TYPE_SDK));
+            }
+            evalTaskMapper.update(null, wrapper
                     .set(EvalTaskEntity::getExecutionStatus, status)
                     .set(EvalTaskEntity::getReasonCode, truncate(reasonCode, 64))
                     .set(EvalTaskEntity::getReason, truncate(reason, 1000))
@@ -528,6 +556,131 @@ public class EvalTaskService {
         } catch (RuntimeException e) {
             log.error("eval task bulk settle failed, run={}", runId, e);
         }
+    }
+
+    // ==================== SDK 外部回写 ====================
+
+    /** run 中仍未终态的 SDK 任务；run 收口后它们等待外部回写，直到宽限期被清理。 */
+    public List<EvalTaskEntity> openSdkTasks(String runId) {
+        if (runId == null) {
+            return List.of();
+        }
+        return evalTaskMapper.selectList(Wrappers.<EvalTaskEntity>lambdaQuery()
+                .eq(EvalTaskEntity::getRunId, runId)
+                .eq(EvalTaskEntity::getEvaluatorType, EvaluatorEntity.TYPE_SDK)
+                .in(EvalTaskEntity::getExecutionStatus, EvalTaskEntity.STATUS_PENDING,
+                        EvalTaskEntity.STATUS_RUNNING)
+                .orderByAsc(EvalTaskEntity::getItemOrder)
+                .orderByAsc(EvalTaskEntity::getEvaluatorOrder));
+    }
+
+    public int countOpenSdkTasks(String runId) {
+        if (runId == null) {
+            return 0;
+        }
+        Long count = evalTaskMapper.selectCount(Wrappers.<EvalTaskEntity>lambdaQuery()
+                .eq(EvalTaskEntity::getRunId, runId)
+                .eq(EvalTaskEntity::getEvaluatorType, EvaluatorEntity.TYPE_SDK)
+                .in(EvalTaskEntity::getExecutionStatus, EvalTaskEntity.STATUS_PENDING,
+                        EvalTaskEntity.STATUS_RUNNING));
+        return count == null ? 0 : count.intValue();
+    }
+
+    /**
+     * SDK 结果回写：任务尚未被服务端认领（保持 PENDING），这里直接从 PENDING/RUNNING 落终态。
+     * 终态不可覆盖——外部结果与迟到结果一样受"只写一次"约束。
+     */
+    public boolean completeExternal(EvalTaskEntity task, EvalResultEntity result, int latencyMs) {
+        if (task == null || result == null) {
+            return false;
+        }
+        String rawLabel = normalizeRawLabel(result.getLabel());
+        String label = normalizeLabel(rawLabel);
+        String status = statusOf(label);
+        String reasonCode = result.getReasonCode() == null || result.getReasonCode().isBlank()
+                ? defaultReasonCode(rawLabel) : result.getReasonCode();
+        int callSeq = nextCallSeq(task);
+        Map<String, Object> resultJson = taskResult(rawLabel, label, reasonCode, result, latencyMs);
+        resultJson.put("origin", "SDK");
+        String json = toJson(resultJson);
+        LocalDateTime now = LocalDateTime.now();
+        try {
+            new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+                int updated = evalTaskMapper.update(null, Wrappers.<EvalTaskEntity>lambdaUpdate()
+                        .eq(EvalTaskEntity::getId, task.getId())
+                        .in(EvalTaskEntity::getExecutionStatus, EvalTaskEntity.STATUS_PENDING,
+                                EvalTaskEntity.STATUS_RUNNING)
+                        .set(EvalTaskEntity::getExecutionStatus, status)
+                        .set(EvalTaskEntity::getVerdict, label)
+                        .set(EvalTaskEntity::getScore, result.getScore())
+                        .set(EvalTaskEntity::getReasonCode, truncate(reasonCode, 64))
+                        .set(EvalTaskEntity::getReason, truncate(result.getReason(), 1000))
+                        .set(EvalTaskEntity::getModel, truncate(result.getJudgeModel(), 128))
+                        .set(EvalTaskEntity::getPromptTokens, result.getPromptTokens())
+                        .set(EvalTaskEntity::getCompletionTokens, result.getCompletionTokens())
+                        .set(EvalTaskEntity::getTotalTokens, totalTokens(result))
+                        .set(EvalTaskEntity::getLatencyMs, latencyMs)
+                        .set(EvalTaskEntity::getAttemptCount, callSeq)
+                        .set(EvalTaskEntity::getResultJson, json)
+                        .set(EvalTaskEntity::getEvidenceHash, Sha256Utils.hash(json))
+                        .set(EvalTaskEntity::getStartedAt, task.getStartedAt() == null
+                                ? now : task.getStartedAt())
+                        .set(EvalTaskEntity::getFinishedAt, now));
+                if (updated == 0) {
+                    throw new TaskStateChangedException();
+                }
+                insertAttempt(task, callSeq, attemptOutcome(status), rawLabel, result, latencyMs,
+                        reasonCode, resultJson);
+            });
+            task.setExecutionStatus(status);
+            task.setVerdict(label);
+            task.setScore(result.getScore());
+            task.setReasonCode(truncate(reasonCode, 64));
+            task.setReason(truncate(result.getReason(), 1000));
+            task.setModel(truncate(result.getJudgeModel(), 128));
+            task.setResultJson(json);
+            task.setEvidenceHash(Sha256Utils.hash(json));
+            task.setAttemptCount(callSeq);
+            task.setStartedAt(task.getStartedAt() == null ? now : task.getStartedAt());
+            task.setFinishedAt(now);
+            return true;
+        } catch (TaskStateChangedException e) {
+            return false;
+        } catch (RuntimeException e) {
+            log.error("eval task external complete failed, task={}", task.getId(), e);
+            return false;
+        }
+    }
+
+    /**
+     * SDK 宽限清理：终端 run 上超过宽限期仍未回写的 SDK 任务标 SKIPPED。
+     * 返回被清理的任务（调用方负责按 item 重聚合并刷新 run 计数）。
+     */
+    public List<EvalTaskEntity> settleExpiredSdkTasks(LocalDateTime cutoff, int limit) {
+        int size = Math.max(1, Math.min(500, limit));
+        List<EvalTaskEntity> expired = evalTaskMapper.selectList(Wrappers.<EvalTaskEntity>lambdaQuery()
+                .eq(EvalTaskEntity::getEvaluatorType, EvaluatorEntity.TYPE_SDK)
+                .in(EvalTaskEntity::getExecutionStatus, EvalTaskEntity.STATUS_PENDING,
+                        EvalTaskEntity.STATUS_RUNNING)
+                .lt(EvalTaskEntity::getCreatedAt, cutoff)
+                .orderByAsc(EvalTaskEntity::getCreatedAt)
+                .last("LIMIT " + size));
+        for (EvalTaskEntity task : expired) {
+            int updated = evalTaskMapper.update(null, Wrappers.<EvalTaskEntity>lambdaUpdate()
+                    .eq(EvalTaskEntity::getId, task.getId())
+                    .in(EvalTaskEntity::getExecutionStatus, EvalTaskEntity.STATUS_PENDING,
+                            EvalTaskEntity.STATUS_RUNNING)
+                    .set(EvalTaskEntity::getExecutionStatus, EvalTaskEntity.STATUS_SKIPPED)
+                    .set(EvalTaskEntity::getReasonCode, "SDK_RESULT_NOT_RECEIVED")
+                    .set(EvalTaskEntity::getReason, "SDK 评测结果超过宽限期未回写")
+                    .set(EvalTaskEntity::getFinishedAt, LocalDateTime.now()));
+            if (updated > 0) {
+                task.setExecutionStatus(EvalTaskEntity.STATUS_SKIPPED);
+            }
+        }
+        return expired.stream()
+                .filter(t -> EvalTaskEntity.STATUS_SKIPPED.equals(t.getExecutionStatus()))
+                .collect(java.util.stream.Collectors.toList());
     }
 
     // ==================== 查询 ====================
@@ -636,6 +789,7 @@ public class EvalTaskService {
         vo.put("itemOrder", task.getItemOrder());
         vo.put("evaluatorId", task.getEvaluatorId());
         vo.put("evaluatorKey", task.getEvaluatorKey());
+        vo.put("evaluatorType", task.getEvaluatorType());
         vo.put("evaluatorVersion", task.getEvaluatorVersion());
         vo.put("evaluatorFingerprint", task.getEvaluatorFingerprint());
         vo.put("status", task.getExecutionStatus());

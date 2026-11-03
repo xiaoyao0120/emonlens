@@ -40,6 +40,8 @@ public class EvalTaskEntity {
     private Integer itemOrder;
     private String evaluatorId;
     private String evaluatorKey;
+    /** EXPRESSION/REGEX/LLM_JUDGE/TRAJECTORY/SDK；SDK 任务由外部回写结果，服务端不执行 */
+    private String evaluatorType;
     private Integer evaluatorVersion;
     private Integer evaluatorOrder;
     private String evaluatorFingerprint;

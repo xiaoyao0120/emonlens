@@ -37,7 +37,7 @@ def check(domain, name, ok_flag, detail=""):
     print(f"  {mark} [{domain}] {name}" + (f" — {detail}" if (detail and not ok_flag) else ""))
 
 
-def req(method, path, body=None, token=None, key=None, api_token=None):
+def req(method, path, body=None, token=None, key=None, api_token=None, idempotency=None):
     """返回 (http_code, json_obj)。平台契约：业务错误也是 HTTP 200 + code!=0。"""
     headers = {"Content-Type": "application/json"}
     if token:
@@ -46,6 +46,8 @@ def req(method, path, body=None, token=None, key=None, api_token=None):
         headers["X-Trust-Key"] = key
     if api_token:
         headers["X-Api-Token"] = api_token
+    if idempotency:
+        headers["Idempotency-Key"] = idempotency
     data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
     r = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
     try:
@@ -401,6 +403,63 @@ def verify_prompt_playground():
     check("prompt", "删除 prompt", ok(j), j)
 
 
+# ---------------------------------------------------------------- 9.1 矩阵 / prompt 绑定（0.2.0）
+def verify_matrix_and_prompt_binding():
+    section("9.1 Playground 矩阵 / prompt 版本绑定（0.2.0）")
+    ds_name = "e2e-matrix-ds"
+    code, j = req("POST", "/api/v1/datasets", {"datasetKey": ds_name}, token=TOKEN)
+    dataset_id = (data_of(j) or {}).get("id") or ""
+    if not dataset_id:
+        code, j = req("GET", "/api/v1/datasets", token=TOKEN)
+        for row in data_of(j) or []:
+            if row.get("datasetKey") == ds_name:
+                dataset_id = row.get("id")
+    check("matrix", "准备矩阵用数据集", bool(dataset_id), j)
+    if not dataset_id:
+        return
+    req("POST", f"/api/v1/datasets/{dataset_id}/items",
+        {"input": "e2e 矩阵样本", "expectedOutput": "e2e"}, token=TOKEN)
+
+    # production 同名唯一：带 setProduction 的新版本要把旧版本的 production 摘掉
+    prompt_name = "e2e-bind-prompt"
+    req("POST", "/api/v1/prompts", {"name": prompt_name, "prompt": "{{input}}", "setProduction": True}, token=TOKEN)
+    req("POST", "/api/v1/prompts", {"name": prompt_name, "prompt": "{{input}} v2", "setProduction": True}, token=TOKEN)
+    code, j = req("GET", f"/api/v1/prompts/{prompt_name}/versions", token=TOKEN)
+    versions = data_of(j) or []
+    production_versions = [v.get("version") for v in versions
+                           if "production" in (v.get("labels") or [])]
+    check("prompt", "production 同名唯一", len(production_versions) == 1, production_versions)
+
+    # 矩阵预估（纯计算，不消耗 LLM）
+    estimate_body = {"datasetId": dataset_id, "sampleLimit": 1,
+                     "columns": [{"key": "c1", "label": "c1", "promptName": prompt_name,
+                                  "promptLabel": "production", "model": "e2e-model"},
+                                 {"key": "c2", "label": "c2", "prompt": "{{input}}", "model": "e2e-model"}]}
+    code, j = req("POST", "/api/v1/playground/matrices/estimate", estimate_body, token=TOKEN)
+    est = data_of(j) or {}
+    check("matrix", "矩阵成本预估", ok(j) and est.get("cellCount") == 2, est)
+
+    # 未确认成本必须拒绝受理
+    code, j = req("POST", "/api/v1/playground/matrices", estimate_body, token=TOKEN,
+                  idempotency="e2e-matrix-guard")
+    check("matrix", "未确认成本时拒绝受理", not ok(j), j.get("message"))
+
+    # 确认后受理（真实调用 LLM，失败也应留下可读状态）
+    accepted_body = dict(estimate_body, confirmEstimate=True)
+    code, j = req("POST", "/api/v1/playground/matrices", accepted_body, token=TOKEN,
+                  idempotency="e2e-matrix-run")
+    matrix_id = (data_of(j) or {}).get("id") or ""
+    check("matrix", "矩阵受理（confirmEstimate=true）", bool(matrix_id), j)
+
+    # 从 prompt 反查评估证据（没有 run 时是空列表，也是可用状态）
+    code, j = req("GET", f"/api/v1/prompts/{prompt_name}/runs", token=TOKEN)
+    check("prompt", "prompt → run 评估证据可查", ok(j), j)
+
+    req("DELETE", f"/api/v1/prompts/{prompt_name}", token=TOKEN)
+    req("DELETE", f"/api/v1/datasets/{dataset_id}", token=TOKEN)
+
+
+
 # ---------------------------------------------------------------- 10. 标注 / 用户洞察 / 价格
 def verify_ops_pages(tid):
     section("10. 标注队列 / 用户洞察 / 模型价格 / 用量")
@@ -556,6 +615,7 @@ def main():
     ev_id = verify_evaluation(tid)
     verify_dataset(tid, ev_id)
     verify_prompt_playground()
+    verify_matrix_and_prompt_binding()
     verify_ops_pages(tid)
     verify_governance()
     verify_score_dashboard()

@@ -24,6 +24,7 @@ public class EmonLensProperties {
     private Eval eval = new Eval();
     private DatasetRun datasetRun = new DatasetRun();
     private DatasetSynthesis datasetSynthesis = new DatasetSynthesis();
+    private Playground playground = new Playground();
     private Metric metric = new Metric();
     private Push push = new Push();
     private Score score = new Score();
@@ -121,7 +122,10 @@ public class EmonLensProperties {
         /** temperature>0 的 Judge 默认不缓存（结果不确定） */
         private boolean cacheAllowStochastic = false;
         private String cacheCleanupCron = "0 10 3 * * *";
-    }
+        /** SDK 评测器结果回写宽限期（小时）；超过后终端 run 上的未回写任务按 SKIPPED 收敛 */
+        private int sdkResultGraceHours = 24;
+        /** 忽略会话空闲阈值（测试 / 手工补评）：为 true 时 SESSION 规则立即评估 */
+        private boolean ignoreSessionIdle = false;    }
 
     /** 数据集异步运行（试点）：批量上限、单线程轮询与离线快照预算 */
     @Data
@@ -162,9 +166,32 @@ public class EmonLensProperties {
         private int maxRetries = 2;
     }
 
+    /** Playground 矩阵实验（R1-2）：试跑产物，有硬上限防止账单失控。 */
     @Data
-    public static class Metric {
-        /** Metric Monitor 评估线程周期（按窗口对齐扫描） */
+    public static class Playground {
+        private Matrix matrix = new Matrix();
+    }
+
+    @Data
+    public static class Matrix {
+        /** 单矩阵样本上限（与 dataset run 的 maxItems 独立，试跑比正式 run 更宽松） */
+        private int maxSamples = 20;
+        /** 列上限：一列 = 一个 prompt 版本 × 模型 × 参数 */
+        private int maxColumns = 8;
+        /** 可挂的评估器上限（与 dataset run 的 maxEvaluators 同口径） */
+        private int maxEvaluators = 5;
+        /** 单元格并发度：单格失败不影响整批 */
+        private int concurrency = 3;
+        /** 网格总格数上限：concurrency × 并发度的成本护栏 */
+        private int maxCells = 200;
+        /** 整批外部调用上限（生成 + 评估） */
+        private int maxCalls = 1000;
+        private long pollIntervalMs = 1000;
+        private int workerThreads = 1;
+    }
+
+    @Data
+    public static class Metric {        /** Metric Monitor 评估线程周期（按窗口对齐扫描） */
         private long scanIntervalMs = 60000;
         /** 基线比较使用的历史窗口数 */
         private int baselineWindows = 6;

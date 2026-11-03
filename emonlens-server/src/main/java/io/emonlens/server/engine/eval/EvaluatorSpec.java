@@ -57,8 +57,11 @@ public class EvaluatorSpec {
     /** LLM_JUDGE：claim 聚合策略 */
     private ClaimsPolicy claimsPolicy;
 
-    /** LLM_JUDGE：判定所需样本字段；缺失时返回 UNKNOWN 而不是 FAIL */
+    /** LLM_JUDGE / SDK：判定所需样本字段；LLM_JUDGE 缺失时返回 UNKNOWN 而不是 FAIL，SDK 声明输入契约 */
     private List<String> requiredFields;
+
+    /** SDK： scorer 代码的人类可读引用（如模块路径或函数名），仅留痕，服务端不执行 */
+    private String scorerRef;
 
     /** 覆盖全局 judge model */
     private String judgeModel;

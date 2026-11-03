@@ -173,6 +173,19 @@ public class DatasetController {
         private String model;
         /** 可选：Gate 成本上限（按 model price 估算）；超出时 Gate FAIL，无法计价时 BLOCKED */
         private java.math.BigDecimal maxCost;
+        /** R1-3：绑定 prompt 版本（version 优先；只给 name 时按 label 解析，缺省 production） */
+        private String promptName;
+        private Integer promptVersion;
+        private String promptLabel;
+        /** R1-4：CI 基线标签（如 baseline）与触发提交号 */
+        private String runLabel;
+        private String commitSha;
+    }
+
+    @Data
+    public static class RunLabelRequest {
+        /** 置空即摘除标签 */
+        private String runLabel;
     }
 
     @Data
@@ -220,16 +233,29 @@ public class DatasetController {
         }).collect(Collectors.toList()));
     }
 
-    /** 轻量实验列表：质量总览等聚合页不需要加载全部样本。 */
+    /** 轻量实验列表：质量总览等聚合页不需要加载全部样本。可按 runLabel 过滤（如 baseline）。 */
     @GetMapping("/{id}/runs")
     @RequiresPermission(Permissions.DATASET_QUERY)
-    public ApiResult<List<DatasetRunEntity>> runs(@PathVariable String id) {
+    public ApiResult<List<DatasetRunEntity>> runs(@PathVariable String id,
+                                                  @RequestParam(required = false) String label) {
         requireOwned(id);
         List<DatasetRunEntity> runs = datasetRunMapper.selectList(Wrappers.<DatasetRunEntity>lambdaQuery()
                 .eq(DatasetRunEntity::getDatasetId, id)
+                .eq(label != null && !label.isBlank(), DatasetRunEntity::getRunLabel, label)
                 .orderByDesc(DatasetRunEntity::getStartedAt));
         enrichRuns(runs);
         return ApiResult.ok(runs);
+    }
+
+    /** 打 / 摘 CI 基线标签（R1-4）：同一数据集的 baseline 只保留最近一次设置的那条。 */
+    @PostMapping("/{id}/runs/{runId}/label")
+    @RequiresPermission(Permissions.EVALUATION_RUN)
+    @Audit(action = "dataset.run.label", resourceType = "dataset")
+    public ApiResult<Map<String, Object>> labelRun(@PathVariable String id, @PathVariable String runId,
+                                                   @RequestBody RunLabelRequest request) {
+        DatasetEntity dataset = requireOwned(id);
+        return ApiResult.ok(datasetRunService.labelRun(dataset.getWorkspaceId(), id, runId,
+                request == null ? null : request.getRunLabel()));
     }
 
     @PostMapping
@@ -689,7 +715,8 @@ public class DatasetController {
                 request.getSystemPrompt(), request.getModel(), request.getCandidateLabel(),
                 request.getCandidateFingerprint(), request.getMaxExternalCalls(),
                 request.getMaxTokens(), request.getReviewMode(), request.getSuiteId(),
-                idempotencyKey, request.getMaxCost());
+                idempotencyKey, request.getMaxCost(), promptRefOf(request),
+                request.getRunLabel(), request.getCommitSha());
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("runId", result.getRun().getId());
         payload.put("status", result.getRun().getStatus());
@@ -697,6 +724,16 @@ public class DatasetController {
         payload.put("run", result.getRun());
         return ResponseEntity.status(result.isCreated() ? HttpStatus.ACCEPTED : HttpStatus.OK)
                 .body(ApiResult.ok(payload));
+    }
+
+    /** 同步 / 异步入口共用的 prompt 引用解析：只给 name 时按 label（缺省 production）解析。 */
+    private io.emonlens.server.engine.prompt.PromptService.PromptRef promptRefOf(RunExperimentRequest request) {
+        if (request.getPromptName() == null || request.getPromptName().isBlank()) {
+            return null;
+        }
+        return new io.emonlens.server.engine.prompt.PromptService.PromptRef(
+                request.getPromptName().trim(), request.getPromptVersion(),
+                request.getPromptLabel(), null);
     }
 
     /** 旧同步入口：保留原响应形状；试点模式拒绝新评测并指向异步入口。 */

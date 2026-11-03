@@ -40,7 +40,8 @@ import lombok.RequiredArgsConstructor;
 public class OpenTokenController {
 
     /** 系统实际使用的 scope 集合（与 OpenApiController 的校验一致）；签发时白名单校验，防止预埋未来 scope。 */
-    public static final Set<String> ALLOWED_SCOPES = Set.of("eval:run", "eval:read", "score:read", "monitors:write");
+    public static final Set<String> ALLOWED_SCOPES = Set.of("eval:run", "eval:read", "eval:content",
+            "score:read", "monitors:write");
 
     private final AccessTokenMapper accessTokenMapper;
 

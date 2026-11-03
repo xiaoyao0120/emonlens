@@ -40,6 +40,7 @@ export const TAB_GROUPS = {
   ],
   workbench: [
     { label: '试跑', path: '/playground', perm: 'workspace:trust:prompt:query' },
+    { label: '矩阵实验', path: '/matrix', perm: 'workspace:trust:prompt:query' },
     { label: '提示词', path: '/prompts', perm: 'workspace:trust:prompt:query' }
   ],
 }

@@ -56,6 +56,16 @@ public class DatasetRunEntity {
     private String runMode;
     /** 重放使用的模型名（REPLAY 模式） */
     private String model;
+    /** 受理时绑定的 prompt 版本引用（R1-3）：候选指纹包含它的内容 hash */
+    private String promptName;
+    private Integer promptVersion;
+    /** 受理时按哪个 label 解析的 prompt（production / latest / 自定义） */
+    private String promptLabel;
+    private String promptHash;
+    /** CI 基线标签（如 baseline）；同一数据集可有多个 run，按标签取最近一条 */
+    private String runLabel;
+    /** 触发本次 run 的提交号：把结论回溯到提交 */
+    private String commitSha;
     private String status;
     private Integer itemCount;
     private Integer passCount;

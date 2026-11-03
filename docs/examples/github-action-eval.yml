@@ -1,0 +1,44 @@
+# 示例：在 PR 上用 EmonLens 做评测门禁并回写评论（R1-4）
+#
+# 用法：
+# 1. 把本文件复制到你的仓库 `.github/workflows/emonlens-eval.yml`；
+# 2. 在仓库 Secrets 里配置 `EMONLENS_API_TOKEN`（需要 eval:run / eval:read / score:read scope）；
+# 3. 仓库变量 `EMONLENS_HOST` 指向你的 EmonLens 实例；
+# 4. 把 `DATASET_ID` / `EVALUATOR_IDS` 换成你自己的 id；
+# 5. 首次在 main 上跑一次并带 run-label=baseline，后续 PR 就有基线可比。
+name: emonlens-eval
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write   # 评论需要写权限
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: EmonLens eval gate
+        id: emonlens
+        uses: your-org/emonlens@v0.2.0
+        with:
+          host: ${{ vars.EMONLENS_HOST }}
+          api-token: ${{ secrets.EMONLENS_API_TOKEN }}
+          dataset: ${{ vars.EMONLENS_DATASET_ID }}
+          evaluators: ${{ vars.EMONLENS_EVALUATOR_IDS }}
+          mode: REPLAY
+          prompt-name: support-assistant
+          prompt-label: production
+          baseline-label: baseline
+          comment: "true"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Show the conclusion
+        if: always()
+        run: |
+          echo "decision=${{ steps.emonlens.outputs.decision }}"
+          echo "usable=${{ steps.emonlens.outputs.usable }}"

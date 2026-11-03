@@ -16,6 +16,7 @@ import io.emonlens.common.EmonLensException;
 import io.emonlens.common.ErrorCode;
 import io.emonlens.server.engine.eval.DatasetRunService;
 import io.emonlens.server.engine.eval.DomainPackService;
+import io.emonlens.server.engine.eval.EvalTaskService;
 import io.emonlens.server.engine.eval.JudgeCalibrationService;
 import io.emonlens.server.storage.entity.DatasetEntity;
 import io.emonlens.server.storage.entity.DatasetRunEntity;
@@ -45,9 +46,11 @@ public class QualityGateService {
     private final QualityGateMapper gateMapper;
     private final DatasetMapper datasetMapper;
     private final DatasetRunService datasetRunService;
+    private final EvalTaskService evalTaskService;
     private final JudgeReviewMapper judgeReviewMapper;
     private final ObjectMapper objectMapper;
     private final DomainPackService domainPackService;
+    private final io.emonlens.server.engine.prompt.PromptService promptService;
 
     public QualityGateEntity evaluate(String workspaceId, String runId, String policyKey,
                                       double minCoverage, int maxFail, int maxUnknown,
@@ -113,6 +116,7 @@ public class QualityGateService {
         check(checks, "JUDGE_TEMPLATES", judgeTemplatesBound(config),
                 "LLM Judge 绑定可追溯模板", "BLOCKED",
                 judgeTemplateSummary(config));
+        addSdkResultsCheck(checks, run, config);
         addJudgeCalibrationCheck(checks, run, items, config);
         addCostBudgetCheck(checks, workspaceId, run.getDatasetId(), run, config);
         check(checks, "SAMPLE_SET_HASH", config != null && config.get("sampleSetHash") != null,
@@ -121,6 +125,7 @@ public class QualityGateService {
         check(checks, "CANDIDATE_FINGERPRINT", run.getCandidateFingerprint() != null
                         && !run.getCandidateFingerprint().isBlank(),
                 "候选有可追溯指纹", "BLOCKED", "candidateFingerprint=" + run.getCandidateFingerprint());
+        addPromptBindingCheck(checks, run);
 
         boolean failed = checks.stream().anyMatch(c -> QualityGateEntity.CHECK_FAIL.equals(c.get("status")));
         boolean blocked = checks.stream().anyMatch(c -> QualityGateEntity.CHECK_BLOCKED.equals(c.get("status")));
@@ -244,6 +249,11 @@ public class QualityGateService {
                     || !gateFingerprint.equals(run.getCandidateFingerprint())) {
                 reasons.add("CANDIDATE_FINGERPRINT_CHANGED");
             }
+            // prompt 改版（production 指针移动）后旧结论自动失效：无需重新评估即可判定过期。
+            String promptExpiry = promptExpiryReason(run);
+            if (promptExpiry != null) {
+                reasons.add(promptExpiry);
+            }
             if (DatasetRunEntity.STATUS_COMPLETED.equals(run.getStatus())) {
                 List<DatasetRunItemEntity> items = datasetRunService.itemsOf(run.getId());
                 datasetRunService.enrich(run, items, false, true);
@@ -276,6 +286,27 @@ public class QualityGateService {
             result.put("judgeCalibration", judgeCalibration);
         }
         return result;
+    }
+
+    /** production 指针移走后返回过期原因；未绑定 prompt 或非 production 绑定返回 null。 */
+    private String promptExpiryReason(DatasetRunEntity run) {
+        if (run.getPromptName() == null || run.getPromptName().isBlank()
+                || run.getPromptVersion() == null
+                || !io.emonlens.server.engine.prompt.PromptService.LABEL_PRODUCTION.equals(
+                        run.getPromptLabel())) {
+            return null;
+        }
+        io.emonlens.server.storage.entity.PromptEntity current =
+                promptService.production(run.getWorkspaceId(), run.getPromptName());
+        if (current == null) {
+            return "PROMPT_PRODUCTION_MISSING:" + run.getPromptName();
+        }
+        if (!current.getVersion().equals(run.getPromptVersion())
+                || !promptService.contentHash(current).equals(run.getPromptHash())) {
+            return "PROMPT_PRODUCTION_MOVED:" + run.getPromptName() + ":v"
+                    + run.getPromptVersion() + "->v" + current.getVersion();
+        }
+        return null;
     }
 
     public QualityGateEntity get(String workspaceId, String id) {
@@ -341,6 +372,51 @@ public class QualityGateService {
         check(checks, "COST_BUDGET", actual.compareTo(maxCost) <= 0,
                 "成本不超过 " + maxCost, "FAIL",
                 "cost=" + actual + " " + cost.get("currency"));
+    }
+
+    /**
+     * R1-3：绑定 prompt 的 run 必须能回答“评的是哪个 prompt 版本”，且 production 指针不能已经
+     * 移走——指针移走意味着现在上线的不是被评的那一版，旧结论不再能作为放行依据。
+     * 未绑定 prompt 的历史 run 不受影响（不新增检查项，保持向后兼容）。
+     */
+    private void addPromptBindingCheck(List<Map<String, Object>> checks, DatasetRunEntity run) {
+        if (run.getPromptName() == null || run.getPromptName().isBlank()) {
+            return;
+        }
+        boolean bound = run.getPromptVersion() != null && run.getPromptHash() != null
+                && !run.getPromptHash().isBlank();
+        if (!bound) {
+            check(checks, "PROMPT_BINDING", false, "已绑定 prompt 版本与内容指纹", "BLOCKED",
+                    "prompt=" + run.getPromptName() + ", version=" + run.getPromptVersion());
+            return;
+        }
+        if (!io.emonlens.server.engine.prompt.PromptService.LABEL_PRODUCTION.equals(run.getPromptLabel())) {
+            check(checks, "PROMPT_BINDING", true, "已绑定 prompt 版本与内容指纹", "BLOCKED",
+                    "prompt=" + run.getPromptName() + " v" + run.getPromptVersion()
+                            + " @" + run.getPromptLabel());
+            return;
+        }
+        io.emonlens.server.storage.entity.PromptEntity current =
+                promptService.production(run.getWorkspaceId(), run.getPromptName());
+        if (current == null) {
+            check(checks, "PROMPT_BINDING", false, "production prompt 仍指向本次评估的版本", "BLOCKED",
+                    "prompt=" + run.getPromptName() + " 没有 production 版本");
+            return;
+        }
+        boolean same = current.getVersion().equals(run.getPromptVersion())
+                && promptService.contentHash(current).equals(run.getPromptHash());
+        check(checks, "PROMPT_BINDING", same, "production prompt 仍指向本次评估的版本", "BLOCKED",
+                same ? "prompt=" + run.getPromptName() + " v" + run.getPromptVersion()
+                        : "已评估 v" + run.getPromptVersion() + "，当前 production=v" + current.getVersion());
+    }
+
+    /** 声明了 SDK 评测器时，结果必须全部回写齐才能放行；缺一个都 BLOCKED。 */
+    private void addSdkResultsCheck(List<Map<String, Object>> checks, DatasetRunEntity run,
+                                    Map<String, Object> config) {
+        boolean sdkPresent = evaluatorTypes(config).contains(EvaluatorEntity.TYPE_SDK);
+        int open = sdkPresent ? evalTaskService.countOpenSdkTasks(run.getId()) : 0;
+        check(checks, "SDK_EVALUATORS", !sdkPresent || open == 0,
+                "SDK 评测结果已收齐", "BLOCKED", "openSdkTasks=" + open);
     }
 
     private void addJudgeCalibrationCheck(List<Map<String, Object>> checks, DatasetRunEntity run,

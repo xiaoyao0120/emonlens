@@ -24,6 +24,7 @@ const routes = [
       { path: 'annotation-queues', name: 'annotation-queues', component: () => import('@/views/trust/AnnotationQueueView.vue'), meta: { title: '注解队列', perm: 'workspace:trust:trace:query' } },
       { path: 'annotation-queues/:id', name: 'annotation-queue-detail', component: () => import('@/views/trust/AnnotationQueueDetailView.vue'), meta: { title: '标注', perm: 'workspace:trust:trace:query' } },
       { path: 'playground', name: 'playground', component: () => import('@/views/trust/PlaygroundView.vue'), meta: { title: '试跑', group: 'workbench', perm: 'workspace:trust:prompt:query' } },
+      { path: 'matrix', name: 'matrix', component: () => import('@/views/trust/MatrixView.vue'), meta: { title: '矩阵实验', group: 'workbench', perm: 'workspace:trust:prompt:query' } },
       { path: 'prompts', name: 'prompts', component: () => import('@/views/trust/PromptView.vue'), meta: { title: '提示词', group: 'workbench', perm: 'workspace:trust:prompt:query' } },
       { path: 'datasets', name: 'datasets', component: () => import('@/views/trust/DatasetView.vue'), meta: { title: '数据集', group: 'assets', perm: 'workspace:trust:dataset:query' } },
       { path: 'datasets/:id', name: 'dataset-detail', component: () => import('@/views/trust/DatasetDetailView.vue'), meta: { title: '数据集详情', perm: 'workspace:trust:dataset:query' } },

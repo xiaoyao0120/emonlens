@@ -122,3 +122,64 @@ def test_wait_for_run_raises_after_consecutive_poll_failures(monkeypatch):
         ev.wait_for_run("run-1", timeout=30, poll_interval=0.01)
     # 连续 MAX_POLL_FAILURES 次失败后抛错，不再无限重试
     assert attempts["n"] == ev.MAX_POLL_FAILURES
+
+
+# ---------- R1-3 / R1-4：prompt 绑定、基线解析、run diff ----------
+
+def test_evaluate_binds_prompt_version_and_ci_metadata(monkeypatch):
+    monkeypatch.setenv("EMONLENS_HOST", "http://emonlens.test")
+    monkeypatch.setenv("EMONLENS_API_TOKEN", "tok-eval")
+    captured = {}
+
+    def fake_request(method, url, token, body=None, idempotency_key=None):
+        captured["body"] = body
+        return {"runId": "run-9", "status": "PENDING"}
+
+    monkeypatch.setattr(ev, "_request", fake_request)
+    ev.evaluate("ds-1", evaluator_ids=["e-1"], mode="REPLAY", wait=False,
+                prompt_name="support-assistant", prompt_label="production",
+                run_label="baseline", commit_sha="abc123")
+    assert captured["body"]["promptName"] == "support-assistant"
+    assert captured["body"]["promptLabel"] == "production"
+    assert "promptVersion" not in captured["body"]
+    assert captured["body"]["runLabel"] == "baseline"
+    assert captured["body"]["commitSha"] == "abc123"
+
+
+def test_evaluate_rejects_prompt_version_without_name():
+    with pytest.raises(ev.EmonLensError):
+        ev.evaluate("ds-1", evaluator_ids=["e-1"], prompt_version=3, wait=False)
+
+
+def test_baseline_run_encodes_query(monkeypatch):
+    monkeypatch.setenv("EMONLENS_HOST", "http://emonlens.test")
+    monkeypatch.setenv("EMONLENS_API_TOKEN", "tok-eval")
+    urls = []
+
+    def fake_request(method, url, token, body=None, idempotency_key=None):
+        urls.append(url)
+        return {"resolved": True, "run": {"id": "run-base"}}
+
+    monkeypatch.setattr(ev, "_request", fake_request)
+    result = ev.baseline_run("ds-1", label="baseline")
+    assert result["resolved"] is True
+    assert urls == ["http://emonlens.test/api/v1/open/eval-runs?datasetId=ds-1&label=baseline"]
+
+
+def test_run_diff_uses_explicit_baseline(monkeypatch):
+    monkeypatch.setenv("EMONLENS_HOST", "http://emonlens.test")
+    monkeypatch.setenv("EMONLENS_API_TOKEN", "tok-eval")
+    urls = []
+
+    def fake_request(method, url, token, body=None, idempotency_key=None):
+        urls.append(url)
+        return {"diff": {"compatible": True}}
+
+    monkeypatch.setattr(ev, "_request", fake_request)
+    ev.run_diff("run-cand", baseline_run_id="run-base", label="baseline")
+    assert urls[0].endswith("/api/v1/open/eval-runs/run-cand/diff?label=baseline&baselineRunId=run-base")
+
+
+def test_get_run_requires_id():
+    with pytest.raises(ev.EmonLensError):
+        ev.get_run("")

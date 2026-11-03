@@ -15,11 +15,13 @@
 from .client import Client, flush, get_client, get_prompt, init, Prompt  # noqa: F401
 from .config import Config  # noqa: F401
 from .evaluate import (EmonLensAssertionError, EmonLensError,  # noqa: F401
-                       EmonLensTimeoutError, assert_test, evaluate, gate_check,
-                       wait_for_run)
+                       EmonLensTimeoutError, assert_test, baseline_run, evaluate,
+                       gate_check, get_run, run_diff, wait_for_run)
+from .sdk_eval import (SdkSample, ScorerResult,  # noqa: F401
+                       fetch_sdk_tasks, push_sdk_results, run_sdk_scorers, scorer)
 from . import integrations  # noqa: F401
 from .observe import (current_trace_id, observe, propagate,  # noqa: F401
                       set_session, trace_context, update_current)
 from .trace import Trace  # noqa: F401
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

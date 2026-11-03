@@ -10,6 +10,7 @@
           <n-button size="small" :disabled="!sourceName" @click="fillFromPrompt">填充</n-button>
         </div>
         <div class="toolbar-actions">
+          <n-button size="small" type="primary" ghost @click="router.push('/matrix')">矩阵实验 →</n-button>
           <n-button size="small" type="primary" ghost @click="openSave">保存为提示词</n-button>
         </div>
       </div>
@@ -174,7 +175,7 @@
 
 <script setup>
 import { computed, h, onMounted, reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { NTag, useMessage } from 'naive-ui'
 import api from '@/api'
 import { toCsv, downloadCsv } from '@/common/csv'
@@ -184,6 +185,7 @@ import Modal from '@/components/Modal.vue'
 
 const message = useMessage()
 const route = useRoute()
+const router = useRouter()
 const running = ref(false)
 const lastResult = ref(null)
 const history = ref([])

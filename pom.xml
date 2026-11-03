@@ -13,7 +13,7 @@
 
     <groupId>io.emonlens</groupId>
     <artifactId>emonlens</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <packaging>pom</packaging>
     <name>emonlens</name>
     <description>EmonLens - Agent Trust Core Engine（common 通用契约 + server 单部署单元）</description>

@@ -51,12 +51,8 @@ public class PairwiseEvaluationService {
     private static final String PROTOCOL = "BIDIRECTIONAL";
     private static final String PROTOCOL_VERSION = "pairwise/v2";
     private static final String PROTOCOL_VERSION_RANDOMIZED = "pairwise/v3";
-    private static final String SYSTEM_PROMPT = "You are an impartial pairwise evaluator. "
-            + "Compare candidate_a and candidate_b for the same input. "
-            + "Ignore length, style, and any assumed model identity. "
-            + "Return strict JSON only: {\"winner\":\"A\"|\"B\"|\"TIE\","
-            + "\"confidence\":0..1,\"reason\":\"...\"}.";
 
+    private final PairwiseJudge pairwiseJudge;
     private final PairwiseEvaluationMapper evaluationMapper;
     private final PairwiseItemMapper itemMapper;
     private final PairwiseHumanReviewMapper humanReviewMapper;
@@ -142,16 +138,16 @@ public class PairwiseEvaluationService {
                 row.setCallsJson("[]");
                 unknown++;
             } else {
-                Result result = judgeItem(input, reference, outputA, outputB, models, samples,
-                        randomize, random, positionCounts);
-                row.setPreference(result.preference);
-                row.setReason(result.reason);
-                row.setCallsJson(toJson(result.calls));
-                if ("A".equals(result.preference)) {
+                PairwiseJudge.Verdict verdict = pairwiseJudge.judge(input, reference, outputA, outputB,
+                        models, samples, randomize, random, positionCounts);
+                row.setPreference(verdict.getPreference());
+                row.setReason(verdict.getReasonCode());
+                row.setCallsJson(toJson(verdict.getCalls()));
+                if ("A".equals(verdict.getPreference())) {
                     aWins++;
-                } else if ("B".equals(result.preference)) {
+                } else if ("B".equals(verdict.getPreference())) {
                     bWins++;
-                } else if ("TIE".equals(result.preference)) {
+                } else if ("TIE".equals(verdict.getPreference())) {
                     ties++;
                 } else {
                     unknown++;
@@ -362,126 +358,6 @@ public class PairwiseEvaluationService {
         return map;
     }
 
-    private Result judgeItem(String input, String reference, String outputA, String outputB,
-                             List<String> models, int samples, boolean randomize,
-                             java.util.Random random, int[] positionCounts) {
-        List<Map<String, Object>> calls = new ArrayList<>();
-        List<String> verdicts = new ArrayList<>();
-        List<String> reasons = new ArrayList<>();
-        for (String model : models) {
-            String directionAB = judgeDirection("AB", input, reference, outputA, outputB,
-                    model, samples, calls, randomize, random, positionCounts);
-            String directionBA = judgeDirection("BA", input, reference, outputB, outputA,
-                    model, samples, calls, randomize, random, positionCounts);
-            if ("UNKNOWN".equals(directionAB) || "UNKNOWN".equals(directionBA)) {
-                verdicts.add("UNKNOWN");
-                reasons.add("DIRECTION_CALL_FAILED_OR_NO_MAJORITY");
-            } else if (directionAB.equals(directionBA)) {
-                verdicts.add(directionAB);
-                reasons.add("BOTH_DIRECTIONS_AGREE");
-            } else {
-                verdicts.add("UNKNOWN");
-                reasons.add("DIRECTIONS_DISAGREE");
-            }
-        }
-        if (models.size() == 1) {
-            return new Result(verdicts.get(0), reasons.get(0), calls);
-        }
-        if (verdicts.stream().anyMatch("UNKNOWN"::equals)) {
-            return new Result("UNKNOWN", "MODEL_CALL_FAILED_OR_DIRECTION_CONFLICT", calls);
-        }
-        int a = 0;
-        int b = 0;
-        int tie = 0;
-        for (String verdict : verdicts) {
-            if ("A".equals(verdict)) {
-                a++;
-            } else if ("B".equals(verdict)) {
-                b++;
-            } else if ("TIE".equals(verdict)) {
-                tie++;
-            }
-        }
-        int majority = models.size() / 2 + 1;
-        if (a >= majority) {
-            return new Result("A", "MODEL_MAJORITY", calls);
-        }
-        if (b >= majority) {
-            return new Result("B", "MODEL_MAJORITY", calls);
-        }
-        if (tie >= majority) {
-            return new Result("TIE", "MODEL_MAJORITY", calls);
-        }
-        return new Result("UNKNOWN", "MODEL_DISAGREEMENT", calls);
-    }
-
-    private String judgeDirection(String direction, String input, String reference,
-                                  String left, String right, String model, int samples,
-                                  List<Map<String, Object>> calls, boolean randomize,
-                                  java.util.Random random, int[] positionCounts) {
-        int a = 0;
-        int b = 0;
-        int tie = 0;
-        boolean failed = false;
-        for (int i = 0; i < samples; i++) {
-            boolean swapped = randomize && random.nextBoolean();
-            boolean firstIsA = !swapped == "AB".equals(direction);
-            positionCounts[firstIsA ? 0 : 1]++;
-            Map<String, Object> call = new LinkedHashMap<>();
-            call.put("direction", direction);
-            call.put("sample", i + 1);
-            call.put("judgeModel", model);
-            call.put("positionOrder", firstIsA ? "AB" : "BA");
-            try {
-                String user = toJson(Map.of(
-                        "input", input,
-                        "reference", reference == null ? "" : reference,
-                        "candidate_a", swapped ? right : left,
-                        "candidate_b", swapped ? left : right));
-                LlmClient.ChatReply reply = llmClient.chatWithUsage(SYSTEM_PROMPT, user, model, 0.0);
-                String raw = parseWinner(reply.content());
-                call.put("rawWinner", raw);
-                String mapped = "UNKNOWN";
-                if ("A".equals(raw)) {
-                    mapped = firstIsA ? "A" : "B";
-                } else if ("B".equals(raw)) {
-                    mapped = firstIsA ? "B" : "A";
-                } else if ("TIE".equals(raw)) {
-                    mapped = "TIE";
-                }
-                call.put("mappedWinner", mapped);
-                call.put("reason", parseReason(reply.content()));
-                if ("A".equals(mapped)) {
-                    a++;
-                } else if ("B".equals(mapped)) {
-                    b++;
-                } else if ("TIE".equals(mapped)) {
-                    tie++;
-                } else {
-                    failed = true;
-                }
-            } catch (Exception e) {
-                call.put("error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-                failed = true;
-            }
-            calls.add(call);
-        }
-        if (failed) {
-            return "UNKNOWN";
-        }
-        int half = samples / 2;
-        if (a > half) {
-            return "A";
-        }
-        if (b > half) {
-            return "B";
-        }
-        if (tie > half) {
-            return "TIE";
-        }
-        return "UNKNOWN";
-    }
-
     private List<String> normalizeModels(CreateRequest request) {
         List<String> raw = request.getJudgeModels();
         List<String> models = new ArrayList<>();
@@ -506,44 +382,6 @@ public class PairwiseEvaluationService {
             throw new EmonLensException(ErrorCode.BAD_REQUEST, "judgeModels 最多 3 个");
         }
         return models;
-    }
-
-    private String parseWinner(String content) {
-        Map<String, Object> map = parseObject(content);
-        Object winner = map.get("winner");
-        if (winner == null) {
-            return "UNKNOWN";
-        }
-        String value = String.valueOf(winner).trim().toUpperCase();
-        return Set.of("A", "B", "TIE").contains(value) ? value : "UNKNOWN";
-    }
-
-    private String parseReason(String content) {
-        Map<String, Object> map = parseObject(content);
-        Object reason = map.get("reason");
-        if (reason == null) {
-            return "";
-        }
-        String value = String.valueOf(reason);
-        return value.length() > 500 ? value.substring(0, 500) : value;
-    }
-
-    private Map<String, Object> parseObject(String content) {
-        if (content == null) {
-            return Map.of();
-        }
-        String trimmed = content.trim();
-        int start = trimmed.indexOf('{');
-        int end = trimmed.lastIndexOf('}');
-        if (start < 0 || end <= start) {
-            return Map.of();
-        }
-        try {
-            return objectMapper.readValue(trimmed.substring(start, end + 1),
-                    new TypeReference<Map<String, Object>>() {});
-        } catch (Exception e) {
-            return Map.of();
-        }
     }
 
     private DatasetRunEntity requireRun(String workspaceId, String datasetId, String runId) {
@@ -650,18 +488,6 @@ public class PairwiseEvaluationService {
             return objectMapper.writeValueAsString(value);
         } catch (Exception e) {
             throw new EmonLensException(ErrorCode.BAD_REQUEST, "pairwise payload 无法序列化");
-        }
-    }
-
-    private static class Result {
-        private final String preference;
-        private final String reason;
-        private final List<Map<String, Object>> calls;
-
-        private Result(String preference, String reason, List<Map<String, Object>> calls) {
-            this.preference = preference;
-            this.reason = reason;
-            this.calls = calls;
         }
     }
 }

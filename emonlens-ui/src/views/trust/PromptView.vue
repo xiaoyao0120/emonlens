@@ -48,6 +48,12 @@
             :max-height="280"
             :row-props="(r) => ({ style: 'cursor:pointer', onClick: () => drillPrompt(r) })" />
         </div>
+        <!-- 评估证据（R1-3）：这个 prompt 版本被哪些 run 评过、Gate 结论是什么 -->
+        <div v-if="promptRuns.length" class="usage-block">
+          <div class="page-sub" style="margin: 4px 0 6px">评估证据（run 绑定 prompt 版本后自动归集；Gate 结论随 production 指针移动失效）</div>
+          <n-data-table size="small" :bordered="false" :columns="promptRunColumns" :data="promptRuns"
+            :row-key="(r) => r.runId" :max-height="220" />
+        </div>
         <div v-for="v in versions" :key="v.id" class="ver-card">
           <div class="ver-head">
             <strong class="mono">v{{ v.version }}</strong>
@@ -166,6 +172,37 @@ async function loadUsage() {
   if (!currentName.value) return
   try { usage.value = await api.promptUsage(currentName.value) || [] } catch (e) { /* ignore */ }
 }
+
+// ---------- 评估证据（R1-3） ----------
+const promptRuns = ref([])
+const promptRunColumns = [
+  { title: 'run', key: 'runId', width: 140, ellipsis: { tooltip: true },
+    render: (r) => h('span', { class: 'mono', style: 'cursor:pointer', onClick: () => openRun(r) },
+      String(r.runId).slice(0, 10)) },
+  { title: 'prompt 版本', key: 'promptVersion', width: 100,
+    render: (r) => h('span', { class: 'mono' }, r.promptVersion ? 'v' + r.promptVersion : '—') },
+  { title: '门禁', key: 'gateDecision', width: 100,
+    render: (r) => r.gateDecision
+      ? h(NTag, { size: 'tiny', bordered: false,
+          type: r.gateDecision === 'PASS' ? 'success' : r.gateDecision === 'FAIL' ? 'error' : 'warning' },
+        { default: () => r.gateDecision })
+      : h('span', { style: 'color:var(--text-muted)' }, '—') },
+  { title: '通过/失败', key: 'passCount', width: 100, align: 'right',
+    render: (r) => h('span', { class: 'mono' }, `${r.passCount ?? 0}/${r.failCount ?? 0}`) },
+  { title: '标签', key: 'runLabel', width: 90, render: (r) => r.runLabel || '—' },
+  { title: '提交', key: 'commitSha', width: 100, render: (r) => r.commitSha ? String(r.commitSha).slice(0, 8) : '—' },
+  { title: '时间', key: 'startedAt', width: 150,
+    render: (r) => h('span', { class: 'num', style: 'font-size:11px' }, r.startedAt ? String(r.startedAt).replace('T', ' ').slice(0, 16) : '—') }
+]
+async function loadPromptRuns() {
+  promptRuns.value = []
+  if (!currentName.value) return
+  try { promptRuns.value = await api.promptRuns(currentName.value) || [] } catch (e) { /* ignore */ }
+}
+function openRun(r) {
+  showVersions.value = false
+  router.push('/datasets/' + r.datasetId + '/runs/' + r.runId)
+}
 function drillPrompt(r) {
   showVersions.value = false
   router.push({ path: '/traces', query: { promptName: currentName.value, promptVersion: r.promptVersion, timeRange: 'all' } })
@@ -246,6 +283,7 @@ async function openVersions(name) {
   currentName.value = name
   await refreshVersions()
   loadUsage()
+  loadPromptRuns()
   showVersions.value = true
 }
 async function refreshVersions() {
@@ -257,6 +295,7 @@ async function doLabel(label, version) {
     message.success(`已将 ${label} 指向 v${version}`)
     await refreshVersions()
     load()
+    loadPromptRuns()
   } catch (e) { message.error(e.message) }
 }
 async function resolveCheck() {

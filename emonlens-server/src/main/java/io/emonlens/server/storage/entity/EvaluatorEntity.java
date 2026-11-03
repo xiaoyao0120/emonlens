@@ -18,6 +18,11 @@ public class EvaluatorEntity {
     public static final String TYPE_LLM_JUDGE = "LLM_JUDGE";
     /** 确定性轨迹检查：期望工具集合/顺序/禁用/步数/参数 */
     public static final String TYPE_TRAJECTORY = "TRAJECTORY";
+    /**
+     * SDK 评测器：判定逻辑在用户环境执行（Python scorer），结果经开放 API 回写任务账本。
+     * 服务端只声明输入契约（spec.requiredFields），不执行任何用户代码。
+     */
+    public static final String TYPE_SDK = "SDK";
 
     public static final String LABEL_PASS = "PASS";
     public static final String LABEL_FAIL = "FAIL";

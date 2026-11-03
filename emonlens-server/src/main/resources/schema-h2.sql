@@ -698,6 +698,7 @@ CREATE TABLE IF NOT EXISTS et_eval_task (
     item_order            INT NOT NULL DEFAULT 0,
     evaluator_id          VARCHAR(36) NOT NULL,
     evaluator_key         VARCHAR(128) NOT NULL,
+    evaluator_type        VARCHAR(32),
     evaluator_version     INT NOT NULL,
     evaluator_order       INT NOT NULL DEFAULT 0,
     evaluator_fingerprint CHAR(64),
@@ -1216,6 +1217,203 @@ CREATE TABLE IF NOT EXISTS et_pairwise_human_review (
     created_at    TIMESTAMP NOT NULL,
     CONSTRAINT uk_pairwise_human_review UNIQUE (evaluation_id, item_id, reviewer)
 );
+
+-- ============ R1-2 Playground 矩阵实验（列 × 样本网格） ============
+-- 矩阵是“试跑”产物：不进 Gate、不进信任分；只有显式升格为 dataset run 后才成为准入证据。
+CREATE TABLE IF NOT EXISTS et_playground_matrix (
+    id                VARCHAR(36) PRIMARY KEY,
+    workspace_id      VARCHAR(64) NOT NULL,
+    request_key       VARCHAR(128) NOT NULL,
+    request_hash      CHAR(64) NOT NULL,
+    dataset_id        VARCHAR(36) NOT NULL,
+    dataset_revision_id VARCHAR(36),
+    name              VARCHAR(128),
+    status            VARCHAR(16) NOT NULL,
+    columns_json      TEXT NOT NULL,
+    estimate_json     TEXT,
+    evaluator_ids_json TEXT,
+    item_count        INT NOT NULL DEFAULT 0,
+    cell_count        INT NOT NULL DEFAULT 0,
+    completed_cells   INT NOT NULL DEFAULT 0,
+    failed_cells      INT NOT NULL DEFAULT 0,
+    prompt_tokens     BIGINT NOT NULL DEFAULT 0,
+    completion_tokens BIGINT NOT NULL DEFAULT 0,
+    cost              DECIMAL(18,6),
+    currency          VARCHAR(8),
+    unpriced_models   VARCHAR(512),
+    error             VARCHAR(1000),
+    created_by        VARCHAR(64),
+    created_at        TIMESTAMP NOT NULL,
+    started_at        TIMESTAMP,
+    finished_at       TIMESTAMP,
+    CONSTRAINT uk_playground_matrix_request UNIQUE (workspace_id, request_key)
+);
+CREATE INDEX IF NOT EXISTS idx_playground_matrix_created
+    ON et_playground_matrix (workspace_id, created_at);
+
+CREATE TABLE IF NOT EXISTS et_playground_cell (
+    id                VARCHAR(36) PRIMARY KEY,
+    workspace_id      VARCHAR(64) NOT NULL,
+    matrix_id         VARCHAR(36) NOT NULL,
+    column_key        VARCHAR(64) NOT NULL,
+    item_id           VARCHAR(36) NOT NULL,
+    item_order        INT NOT NULL DEFAULT 0,
+    status            VARCHAR(16) NOT NULL,
+    output            TEXT,
+    output_hash       CHAR(64),
+    rendered_prompt   TEXT,
+    input_text        TEXT,
+    expected_text     TEXT,
+    error             VARCHAR(1000),
+    prompt_tokens     INT,
+    completion_tokens INT,
+    latency_ms        INT,
+    cost              DECIMAL(18,6),
+    scores_json       TEXT,
+    aggregate_label   VARCHAR(16),
+    score             DECIMAL(8,4),
+    created_at        TIMESTAMP NOT NULL,
+    finished_at       TIMESTAMP,
+    CONSTRAINT uk_playground_cell UNIQUE (matrix_id, column_key, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_playground_cell_matrix
+    ON et_playground_cell (matrix_id, column_key, item_order);
+
+-- Diff 结论：确定性变化（文本是否变）+ 语义偏好（复用成对比较口径），逐样本留痕可追溯。
+CREATE TABLE IF NOT EXISTS et_playground_diff (
+    id                  VARCHAR(36) PRIMARY KEY,
+    workspace_id        VARCHAR(64) NOT NULL,
+    matrix_id           VARCHAR(36) NOT NULL,
+    base_column         VARCHAR(64) NOT NULL,
+    target_column       VARCHAR(64) NOT NULL,
+    protocol_version    VARCHAR(32) NOT NULL,
+    judge_models_json   TEXT,
+    position_randomized BOOLEAN,
+    position_seed       BIGINT,
+    item_count          INT NOT NULL DEFAULT 0,
+    same_count          INT NOT NULL DEFAULT 0,
+    changed_count       INT NOT NULL DEFAULT 0,
+    improved_count      INT NOT NULL DEFAULT 0,
+    regressed_count     INT NOT NULL DEFAULT 0,
+    tradeoff_count      INT NOT NULL DEFAULT 0,
+    tie_count           INT NOT NULL DEFAULT 0,
+    unknown_count       INT NOT NULL DEFAULT 0,
+    status              VARCHAR(16) NOT NULL,
+    created_by          VARCHAR(64),
+    created_at          TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_playground_diff_matrix
+    ON et_playground_diff (matrix_id, created_at);
+
+CREATE TABLE IF NOT EXISTS et_playground_diff_item (
+    id              VARCHAR(36) PRIMARY KEY,
+    workspace_id    VARCHAR(64) NOT NULL,
+    diff_id         VARCHAR(36) NOT NULL,
+    item_id         VARCHAR(36) NOT NULL,
+    deterministic   VARCHAR(16) NOT NULL,
+    preference      VARCHAR(16) NOT NULL,
+    reason_code     VARCHAR(64),
+    reason          VARCHAR(512),
+    score_delta_json TEXT,
+    calls_json      TEXT,
+    CONSTRAINT uk_playground_diff_item UNIQUE (diff_id, item_id)
+);
+
+-- ============ R1-3 Prompt 版本 × 实验打通 ============
+-- run 记录 prompt 版本引用：候选指纹包含 prompt 内容 hash，production 指针移动后旧 Gate 自动失效。
+ALTER TABLE et_dataset_run ADD COLUMN IF NOT EXISTS prompt_name VARCHAR(128);
+ALTER TABLE et_dataset_run ADD COLUMN IF NOT EXISTS prompt_version INT;
+ALTER TABLE et_dataset_run ADD COLUMN IF NOT EXISTS prompt_label VARCHAR(32);
+ALTER TABLE et_dataset_run ADD COLUMN IF NOT EXISTS prompt_hash CHAR(64);
+-- CI 基线标签与提交号：跑一次 run 就能回答“哪次提交、按哪条基线放行”。
+ALTER TABLE et_dataset_run ADD COLUMN IF NOT EXISTS run_label VARCHAR(64);
+ALTER TABLE et_dataset_run ADD COLUMN IF NOT EXISTS commit_sha VARCHAR(64);
+CREATE INDEX IF NOT EXISTS idx_dataset_run_label ON et_dataset_run (workspace_id, dataset_id, run_label);
+
+-- resolve 审计：谁在什么时候按哪个 label 取到了哪个版本（GET 不进 et_audit_log 的操作日志，单独留痕）
+CREATE TABLE IF NOT EXISTS et_prompt_resolution (
+    id            VARCHAR(36) PRIMARY KEY,
+    workspace_id  VARCHAR(64) NOT NULL,
+    name          VARCHAR(128) NOT NULL,
+    label         VARCHAR(32) NOT NULL,
+    version       INT NOT NULL,
+    prompt_hash   CHAR(64),
+    source        VARCHAR(32),
+    requested_by  VARCHAR(64),
+    created_at    TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_resolution_name
+    ON et_prompt_resolution (workspace_id, name, created_at);
+
+-- ============ R2-1 评估规则 v2（scope / filter / 回溯） ============
+-- 规则取代「全局采样率」：每条规则自带 scope、过滤条件、采样率与小时预算。
+-- 没有启用规则的工作空间继续走旧的全局采样（向后兼容，不改既有行为）。
+CREATE TABLE IF NOT EXISTS et_eval_rule (
+    id                VARCHAR(36) PRIMARY KEY,
+    workspace_id      VARCHAR(64) NOT NULL,
+    rule_key          VARCHAR(100) NOT NULL,
+    name              VARCHAR(200),
+    enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+    scope             VARCHAR(16) NOT NULL DEFAULT 'TRACE',
+    filters_json      TEXT,
+    evaluator_ids_json TEXT NOT NULL,
+    sample_rate       DOUBLE NOT NULL DEFAULT 1.0,
+    error_forced      BOOLEAN NOT NULL DEFAULT TRUE,
+    max_per_hour      INT NOT NULL DEFAULT 0,
+    session_idle_minutes INT NOT NULL DEFAULT 5,
+    priority          INT NOT NULL DEFAULT 100,
+    created_by        VARCHAR(64),
+    created_at        TIMESTAMP NOT NULL,
+    updated_at        TIMESTAMP NOT NULL,
+    CONSTRAINT uk_eval_rule UNIQUE (workspace_id, rule_key)
+);
+CREATE INDEX IF NOT EXISTS idx_eval_rule_scope ON et_eval_rule (workspace_id, enabled, scope);
+
+-- 规则命中账本：既是预算计数器，也是幂等记录（同一 rule + 主体只评估一次）。
+CREATE TABLE IF NOT EXISTS et_eval_rule_hit (
+    id            VARCHAR(36) PRIMARY KEY,
+    workspace_id  VARCHAR(64) NOT NULL,
+    rule_key      VARCHAR(100) NOT NULL,
+    scope         VARCHAR(16) NOT NULL,
+    subject_id    VARCHAR(64) NOT NULL,
+    decision      VARCHAR(24) NOT NULL,
+    eval_count    INT NOT NULL DEFAULT 0,
+    detail        VARCHAR(500),
+    created_at    TIMESTAMP NOT NULL,
+    CONSTRAINT uk_eval_rule_hit UNIQUE (rule_key, subject_id)
+);
+CREATE INDEX IF NOT EXISTS idx_eval_rule_hit_budget ON et_eval_rule_hit (rule_key, created_at);
+
+-- Rewind：按 filter 圈选历史 trace 批量补评；可暂停、限速、幂等。
+CREATE TABLE IF NOT EXISTS et_eval_rewind_job (
+    id                VARCHAR(36) PRIMARY KEY,
+    workspace_id      VARCHAR(64) NOT NULL,
+    request_key       VARCHAR(128) NOT NULL,
+    rule_key          VARCHAR(100) NOT NULL,
+    filter_json       TEXT,
+    status            VARCHAR(16) NOT NULL,
+    rate_per_minute   INT NOT NULL DEFAULT 60,
+    total             INT NOT NULL DEFAULT 0,
+    processed         INT NOT NULL DEFAULT 0,
+    evaluated         INT NOT NULL DEFAULT 0,
+    deduped           INT NOT NULL DEFAULT 0,
+    failed            INT NOT NULL DEFAULT 0,
+    cursor_start_time TIMESTAMP,
+    cursor_trace_id   VARCHAR(64),
+    error             VARCHAR(1000),
+    created_by        VARCHAR(64),
+    created_at        TIMESTAMP NOT NULL,
+    started_at        TIMESTAMP,
+    finished_at       TIMESTAMP,
+    CONSTRAINT uk_eval_rewind_request UNIQUE (workspace_id, request_key)
+);
+CREATE INDEX IF NOT EXISTS idx_eval_rewind_status ON et_eval_rewind_job (workspace_id, status, created_at);
+
+-- 评估结果增加 scope/session/rule：SESSION 汇总与「哪条规则产出的结论」都靠这三列可查。
+ALTER TABLE et_eval_result ADD COLUMN IF NOT EXISTS scope VARCHAR(16);
+ALTER TABLE et_eval_result ADD COLUMN IF NOT EXISTS session_id VARCHAR(64);
+ALTER TABLE et_eval_result ADD COLUMN IF NOT EXISTS rule_key VARCHAR(100);
+CREATE INDEX IF NOT EXISTS idx_eval_result_scope ON et_eval_result (workspace_id, scope, evaluator_key, created_at);
 
 -- 时间窗列表 / 保留期扫描索引（H2 demo 与 MySQL 保持同等计划）
 CREATE INDEX IF NOT EXISTS idx_trace_ws_start ON et_trace_summary (workspace_id, start_time);
