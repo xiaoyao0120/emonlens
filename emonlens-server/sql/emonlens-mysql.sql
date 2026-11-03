@@ -1437,3 +1437,39 @@ ALTER TABLE et_eval_result ADD COLUMN scope VARCHAR(16);
 ALTER TABLE et_eval_result ADD COLUMN session_id VARCHAR(64);
 ALTER TABLE et_eval_result ADD COLUMN rule_key VARCHAR(100);
 CREATE INDEX idx_eval_result_scope ON et_eval_result (workspace_id, scope, evaluator_key, created_at);
+
+-- ============ R2-2 端用户反馈采集 ============
+CREATE TABLE IF NOT EXISTS et_feedback_token (
+    id            VARCHAR(36) PRIMARY KEY,
+    workspace_id  VARCHAR(64) NOT NULL,
+    trace_id      VARCHAR(64) NOT NULL,
+    token_hash    CHAR(64) NOT NULL,
+    max_uses      INT NOT NULL DEFAULT 5,
+    used_count    INT NOT NULL DEFAULT 0,
+    expires_at    DATETIME(3),
+    revoked_at    DATETIME(3),
+    last_used_at  DATETIME(3),
+    created_by    VARCHAR(64),
+    created_at    DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_feedback_token (token_hash),
+    KEY idx_feedback_token_trace (workspace_id, trace_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+CREATE TABLE IF NOT EXISTS et_end_user_feedback (
+    id            VARCHAR(36) PRIMARY KEY,
+    workspace_id  VARCHAR(64) NOT NULL,
+    trace_id      VARCHAR(64) NOT NULL,
+    token_id      VARCHAR(36),
+    kind          VARCHAR(16) NOT NULL,
+    value_num     DECIMAL(8,4),
+    value_text    VARCHAR(200),
+    correction    TEXT,
+    comment       VARCHAR(1000),
+    user_ref      VARCHAR(128),
+    source        VARCHAR(16) NOT NULL DEFAULT 'END_USER',
+    label         VARCHAR(16),
+    score         DECIMAL(5,2),
+    created_at    DATETIME(3) NOT NULL,
+    KEY idx_end_user_feedback_trace (workspace_id, trace_id, created_at),
+    KEY idx_end_user_feedback_agent (workspace_id, created_at, kind)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;

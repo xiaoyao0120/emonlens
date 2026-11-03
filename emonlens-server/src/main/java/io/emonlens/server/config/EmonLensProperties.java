@@ -25,6 +25,7 @@ public class EmonLensProperties {
     private DatasetRun datasetRun = new DatasetRun();
     private DatasetSynthesis datasetSynthesis = new DatasetSynthesis();
     private Playground playground = new Playground();
+    private Feedback feedback = new Feedback();
     private Metric metric = new Metric();
     private Push push = new Push();
     private Score score = new Score();
@@ -188,6 +189,21 @@ public class EmonLensProperties {
         private int maxCalls = 1000;
         private long pollIntervalMs = 1000;
         private int workerThreads = 1;
+    }
+
+    /** 端用户反馈（R2-2）：预签 token 的配额、过期、限流，以及负反馈触发 Finding 的阈值。 */
+    @Data
+    public static class Feedback {
+        /** 单个 token 默认可用次数 */
+        private int tokenMaxUses = 5;
+        /** 单个 token 默认有效期（分钟；7 天） */
+        private int tokenExpiresMinutes = 10080;
+        /** 同一 token 每分钟最多提交次数（滑动窗口） */
+        private int rateLimitPerMinute = 20;
+        /** 同一 trace 在窗口内累计多少条负面反馈触发 Finding */
+        private int findingThreshold = 3;
+        private int findingWindowHours = 24;
+        private String findingSeverity = "MEDIUM";
     }
 
     @Data

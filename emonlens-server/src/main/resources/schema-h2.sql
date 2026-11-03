@@ -1415,6 +1415,46 @@ ALTER TABLE et_eval_result ADD COLUMN IF NOT EXISTS session_id VARCHAR(64);
 ALTER TABLE et_eval_result ADD COLUMN IF NOT EXISTS rule_key VARCHAR(100);
 CREATE INDEX IF NOT EXISTS idx_eval_result_scope ON et_eval_result (workspace_id, scope, evaluator_key, created_at);
 
+-- ============ R2-2 端用户反馈采集 ============
+-- 预签 token：只带「给这条 trace 打分」的权限，读不到正文；可限次数、可过期、可吊销。
+CREATE TABLE IF NOT EXISTS et_feedback_token (
+    id            VARCHAR(36) PRIMARY KEY,
+    workspace_id  VARCHAR(64) NOT NULL,
+    trace_id      VARCHAR(64) NOT NULL,
+    token_hash    CHAR(64) NOT NULL,
+    max_uses      INT NOT NULL DEFAULT 5,
+    used_count    INT NOT NULL DEFAULT 0,
+    expires_at    TIMESTAMP,
+    revoked_at    TIMESTAMP,
+    last_used_at  TIMESTAMP,
+    created_by    VARCHAR(64),
+    created_at    TIMESTAMP NOT NULL,
+    CONSTRAINT uk_feedback_token UNIQUE (token_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_token_trace ON et_feedback_token (workspace_id, trace_id);
+
+-- 反馈本体：数值 / 分类 / 布尔 / 纠正（correction 即用户给出的期望输出，可直接转样本）。
+CREATE TABLE IF NOT EXISTS et_end_user_feedback (
+    id            VARCHAR(36) PRIMARY KEY,
+    workspace_id  VARCHAR(64) NOT NULL,
+    trace_id      VARCHAR(64) NOT NULL,
+    token_id      VARCHAR(36),
+    kind          VARCHAR(16) NOT NULL,
+    value_num     DECIMAL(8,4),
+    value_text    VARCHAR(200),
+    correction    TEXT,
+    comment       VARCHAR(1000),
+    user_ref      VARCHAR(128),
+    source        VARCHAR(16) NOT NULL DEFAULT 'END_USER',
+    label         VARCHAR(16),
+    score         DECIMAL(5,2),
+    created_at    TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_end_user_feedback_trace
+    ON et_end_user_feedback (workspace_id, trace_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_end_user_feedback_agent
+    ON et_end_user_feedback (workspace_id, created_at, kind);
+
 -- 时间窗列表 / 保留期扫描索引（H2 demo 与 MySQL 保持同等计划）
 CREATE INDEX IF NOT EXISTS idx_trace_ws_start ON et_trace_summary (workspace_id, start_time);
 CREATE INDEX IF NOT EXISTS idx_span_ws_start ON et_span_event (workspace_id, start_time);

@@ -206,7 +206,7 @@ EmonLens 与竞品的能力分布是互补的：
     独立 span 采样需要 span→content 映射先落地）；② Monitor 阈值判定的分母口径未随 scope 调整，
     仍是「按 agentKey + evaluatorKey 的最近 N 条结果」，需要等 SESSION 结果的统计口径统一后再改。
 
-#### R2-2 端用户反馈采集
+#### R2-2 端用户反馈采集　✅ 已实现（预签 token / 四类 score / 转样本 / 阈值 Finding）
 
 - **对标**：LangSmith presigned feedback tokens；Langfuse score 类型学。
 - **方案要点**：
@@ -214,6 +214,21 @@ EmonLens 与竞品的能力分布是互补的：
   - score 类型学：numeric / categorical / boolean / correction（correction 即用户给出的期望输出，可直接转样本）。
   - 反馈落在既有 human score 体系；阈值触发 Finding（复用 4 类监控规则的扩展位）；一键「收录数据集」把带 correction 的 trace 变样本（打通既有 Trace → 数据集入口）。
 - **验收标准**：token 泄露场景只能写分数不能读正文；correction 类反馈进数据集时走样本契约校验。
+- **实现落点**：`et_feedback_token`（只存 sha256）/ `et_end_user_feedback`（类型化明细）两张表；
+  `EndUserFeedbackService` + `PublicFeedbackController`（`/api/v1/feedback/{token}`，从 JWT 拦截链豁免）
+  + `TraceFeedbackController`（签发 / 吊销 / 查看 / 收录数据集）。
+  - **权限边界**：token 只授予「给指定 trace 写一条反馈」；用 token 当 bearer 访问控制面仍是 40101；
+    `GET /api/v1/feedback/{token}` 只回 `valid / expiresAt / remainingUses`，不含 traceId 与任何正文。
+  - **类型归一**：numeric 0–10（≥6 记 PASS，与人工评分同口径）、boolean（true/up→PASS）、
+    categorical（好/差等词表映射，未知词记 UNKNOWN 而不是硬判）、correction（记 FAIL 并把纠正内容单独留存）。
+  - **落库**：每条反馈同时写一条 `et_eval_result`（evaluatorKey=`end-user-feedback`），
+    既有监控、质量视图与信任分不需要新增数据通路；`reason` 只写类型与是否带纠正，**不写用户正文**。
+  - **Finding**：同一 trace 在窗口内负面反馈数量「刚好跨过阈值」时产生一条 `END_USER_FEEDBACK` Finding，
+    不会每条差评都开一条。
+  - **转样本**：只有 correction 类可收录；输入取 trace 的 `inputPreview`，期望输出取纠正内容，
+    走 `EvaluationCaseService.validate`（超长/非法直接 400，不静默截断）。
+  - 已知偏差：categorical 目前是内置词表映射（不提供自定义标签体系）；token 限流是单实例内存窗口，
+    多实例部署时各实例独立计数（仍能挡住脚本刷量，但不是全局限额）。
 
 #### R2-3 评估器质量看板
 

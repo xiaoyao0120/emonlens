@@ -1187,5 +1187,90 @@ curl -s -X POST "$HOST/api/v1/eval-rules/rewinds/$JOB/cancel" -H "Authorization:
 - `SPAN` scope 目前复用 TRACE 的正文口径（独立 span 采样需要 span→content 映射先落地）。
 - Evaluation Monitor 的阈值判定仍是「按 agentKey + evaluatorKey 的最近 N 条」，分母尚未随 scope 调整。
 
+---
+
+## 16. 端用户反馈采集（R2-2）
+
+把真实用户的评价接进评测闭环：平台为某条 trace 预签一个**只能写反馈**的 token，端用户（或你的前端/客服系统）拿它提交评价，不接触正文与账号体系。
+
+### 16.1 签发 token（控制面）
+
+```bash
+curl -s -X POST "$HOST/api/v1/traces/$TRACE_ID/feedback-tokens" \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -d '{"maxUses": 3, "expiresInMinutes": 10080}'
+# → {"token":"fb_...","tokenId":"...","maxUses":3,"expiresAt":"...","endpoint":"/api/v1/feedback/fb_..."}
+```
+
+- 明文 token **只在这个响应里出现一次**，库里只存 sha256。
+- `maxUses` 1–100（默认 5），`expiresInMinutes` 0–525600（默认 7 天，0=立即过期）。
+- 吊销：`POST /api/v1/traces/{traceId}/feedback-tokens/{tokenId}/revoke`。
+
+### 16.2 提交反馈（公开，免登录）
+
+```bash
+# 数值（0–10，>=6 记为 PASS）
+curl -s -X POST "$HOST/api/v1/feedback/$TOKEN" -H 'Content-Type: application/json' \
+  -d '{"kind":"NUMERIC","valueNum":2,"comment":"答非所问","userRef":"anon-42"}'
+
+# 布尔（点赞/点踩）
+curl -s -X POST "$HOST/api/v1/feedback/$TOKEN" -d '{"kind":"BOOLEAN","valueText":"down"}'
+
+# 分类（好/差/一般；未知词记 UNKNOWN，不硬判）
+curl -s -X POST "$HOST/api/v1/feedback/$TOKEN" -d '{"kind":"CATEGORICAL","valueText":"差"}'
+
+# 纠正：用户直接给出期望答案，可直接收录为数据集样本
+curl -s -X POST "$HOST/api/v1/feedback/$TOKEN" -d '{
+  "kind":"CORRECTION","correction":"在「财务中心 → 发票管理」提交开票申请"}'
+```
+
+返回 `{accepted, feedbackId, label, remainingUses}`。查询 token 状态（也免登录，但只回能不能继续提交）：
+
+```bash
+curl -s "$HOST/api/v1/feedback/$TOKEN"     # {"valid":true,"expiresAt":...,"remainingUses":2}
+```
+
+### 16.3 安全边界（刻意的最小权限）
+
+| 场景 | 结果 |
+| --- | --- |
+| 拿 token 当 Bearer 访问 `/api/v1/traces/{id}` | 仍是 `40101`（token 不是登录凭据） |
+| 泄露 token 后能读到什么 | 只能看 `valid/expiresAt/remainingUses`，读不到 traceId、正文、工作空间 |
+| 刷量 | 单 token 每分钟限流（默认 20 次，可配）+ `maxUses` 配额 |
+| 过期 / 吊销后 | `40301`；配额用尽 `40901` |
+
+### 16.4 反馈落到哪里
+
+- 每条反馈写一行 `et_end_user_feedback`（类型化明细），同时写一条 `et_eval_result`
+  （`evaluatorKey=end-user-feedback`），所以既有的评估监控、质量总览、信任分**不需要改**就能看到它。
+- `reason` 只记录类型与「是否带纠正」，**不写用户正文**；纠正内容只在 `et_end_user_feedback.correction` 里。
+- 同一 trace 在窗口内负面反馈「刚好跨过阈值」（默认 3 条 / 24h）时产生一条 `END_USER_FEEDBACK` Finding，
+  进入既有的 Incident 归并；不会每条差评都开一条。
+
+### 16.5 把纠正反馈变成样本
+
+```bash
+curl -s -X POST "$HOST/api/v1/traces/$TRACE_ID/feedback/$FEEDBACK_ID/dataset" \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -d '{"datasetId":"ds-1"}'
+```
+
+- 只有 `CORRECTION` 类可收录（其它类型返回 400，明确说明原因）。
+- 样本输入取 trace 的 `inputPreview`，期望输出取用户纠正内容，`sourceType=USER_FEEDBACK`、
+  `sourceRef=feedback:<id>`；写入前走 `EvaluationCaseService` 契约校验（超长/非法直接 400）。
+- 若 trace 没有输入预览（未采集 prompt 内容），收录会被拒绝并提示手工补充 input。
+
+### 16.6 配置项
+
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| `emonlens.feedback.token-max-uses` | 5 | 单 token 默认可用次数 |
+| `emonlens.feedback.token-expires-minutes` | 10080 | 单 token 默认有效期（7 天） |
+| `emonlens.feedback.rate-limit-per-minute` | 20 | 单 token 每分钟提交上限（单实例内存窗口） |
+| `emonlens.feedback.finding-threshold` | 3 | 触发 Finding 的负面反馈条数 |
+| `emonlens.feedback.finding-window-hours` | 24 | 阈值统计窗口 |
+| `emonlens.feedback.finding-severity` | MEDIUM | Finding 严重级 |
+
+
 
 

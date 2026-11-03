@@ -320,6 +320,8 @@ docker compose logs mysql # 数据库日志
   mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-10-playground-matrix-prompt-binding.sql
   # R2-1：评估规则 v2（规则对象 / 命中账本 / Rewind 作业 / eval_result 增列）
   mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-11-eval-rule-v2.sql
+  # R2-2：端用户反馈（预签 token / 类型化反馈）
+  mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-12-end-user-feedback.sql
   ```
 
   脚本均可重复执行；pilot 脚本开头会输出重复明细预检，若返回行或唯一键创建失败，
