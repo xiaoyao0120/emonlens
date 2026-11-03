@@ -1464,7 +1464,9 @@ Gate 里新增检查项 `SECURITY_REDLINE`：
 ### 19.4 边界
 
 - 种子是固定集合（不含 strategy 组合自动生成）；要更强覆盖请自带样本或接入外部红队结果。
-- security 证据目前进 Gate 与报告，**尚未并入五维信任分的 security 维度**（该维度仍看 SECURITY 类监控 Finding）。
+- security 证据进入 Gate、报告与**五维信任分**：agent 最近一次含安全样本的 COMPLETED run 若 `VIOLATION`，
+  security 维度直接 0 分（basis 标注 `security_run:VIOLATION`）；`SECURE/INSUFFICIENT` 只补充来源说明。
+  评分重算沿用平台既有触发点（finding / 自动评估），数据集 run 收口本身不另发评分事件。
 - 红线固定 0：`securityFail>0` 属于放宽政策，与"政策只能更严"冲突，平台不接受。
 
 ---

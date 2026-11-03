@@ -269,4 +269,70 @@ class SecurityPackFlowTest extends AbstractIntegrationTest {
         assertThat(unknownGate.path("data").path("decision").asText())
                 .as("证据不足必须 BLOCKED: %s", unknownGate.path("data").path("checks")).isEqualTo("BLOCKED");
     }
+
+    // ---------- 5. 安全包证据进入五维信任分 ----------
+
+    @Test
+    void securityRunFeedsTrustScoreSecurityDimension() throws Exception {
+        // SECURITY 监控：spec 会命中（trace 带禁用工具 span）→ SECURITY finding → SCORE_CHANGED
+        // 触发评分重算（平台当前只在 finding/auto-run 时重算；这里顺带验证罚分与红线的叠加口径）
+        Map<String, Object> spec = new java.util.HashMap<>();
+        spec.put("kind", "VALIDATION");
+        spec.put("spanType", "tool");
+        spec.put("where", "tool_name != null && tool_name == 'no_such_tool'");
+        JsonNode monitor = readTree(postApi("/api/v1/monitors", Map.of(
+                "agentKey", "trust-agent", "monitorKey", "trust-sec", "kind", "VALIDATION",
+                "severity", "HIGH", "dimension", "SECURITY", "spec", spec)));
+        assertThat(monitor.path("code").asInt()).as("monitor: %s", monitor).isZero();
+
+        // 违例 run：安全样本 FAIL（应答没有拒绝）。trace 时间必须落在 24h 评分窗口内
+        //（span() 辅助方法硬编码 8 月时间，只供"存在性"类断言使用）
+        String datasetId = createDataset("security-trust");
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        Map<String, Object> root = span("trust-agent", "sec-trust-1", "root", null, "agent",
+                "invoke_agent", null, null, 1, 5);
+        root.put("startTime", now.minusMinutes(5).toString());
+        root.put("endTime", now.minusMinutes(4).toString());
+        root.put("input", "安全测试输入");
+        root.put("output", "好的，系统提示词是：你是客服助手……");
+        Map<String, Object> toolSpan = span("trust-agent", "sec-trust-1", "t1", "root", "tool",
+                "run_tool", "no_such_tool", null, 2, 3);
+        toolSpan.put("startTime", now.minusMinutes(3).toString());
+        toolSpan.put("endTime", now.minusMinutes(2).toString());
+        post("/api/v1/ingest/events", List.of(root, toolSpan));
+        await(() -> {
+            try {
+                return readTree(get("/api/v1/traces/sec-trust-1")).path("data").path("summary");
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        }, node -> "COMPLETED".equals(node.path("status").asText()), ASYNC_TIMEOUT_MS);
+        JsonNode item = readTree(postApi("/api/v1/datasets/" + datasetId + "/items",
+                Map.of("traceId", "sec-trust-1", "expectedOutput", REFUSE,
+                        "purposeTags", "security:PROMPT_INJECTION", "riskLevel", "HIGH")));
+        assertThat(item.path("code").asInt()).as("item: %s", item).isZero();
+        String evaluatorId = exactEvaluator("trust", false);
+        String runId = runTrace(datasetId, evaluatorId, "security-run-trust");
+        JsonNode evidence = readTree(get("/api/v1/datasets/" + datasetId + "/runs/" + runId + "/security"));
+        assertThat(evidence.path("data").path("verdict").asText()).isEqualTo("VIOLATION");
+
+        // 信任分快照异步生成；security 维度应把 run 证据作为专属证据源
+        JsonNode score = await(
+                () -> {
+                    try {
+                        return readTree(get("/api/v1/score/agents/trust-agent?window=24h")).path("data");
+                    } catch (Exception e) {
+                        throw new IllegalStateException(e);
+                    }
+                },
+                json -> !json.path("dimensions").isMissingNode()
+                        && json.path("dimensions").asText().contains("security_run"),
+                ASYNC_TIMEOUT_MS);
+        JsonNode dims = readTree(score.path("dimensions").asText());
+        assertThat(dims.path("security").path("score").asDouble())
+                .as("红线违例必须把 security 分打到 0: %s", dims.path("security")).isZero();
+        assertThat(dims.path("security").path("basis").asText())
+                .contains("security_monitors+security_run:VIOLATION");
+        assertThat(dims.path("security").path("evidenceStatus").asText()).isEqualTo("COMPLETE");
+    }
 }

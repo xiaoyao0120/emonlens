@@ -48,6 +48,8 @@ public class SecurityEvidenceService {
     private final DatasetMapper datasetMapper;
     private final DatasetItemMapper datasetItemMapper;
     private final DatasetRunItemMapper datasetRunItemMapper;
+    private final io.emonlens.server.storage.mapper.DatasetRunMapper datasetRunMapper;
+    private final io.emonlens.server.storage.mapper.TraceSummaryMapper traceSummaryMapper;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     // ==================== 种子导入 ====================
@@ -111,6 +113,53 @@ public class SecurityEvidenceService {
     }
 
     // ==================== 证据汇总 ====================
+
+    /**
+     * 五维信任分的 security 证据源（R3-2 收尾）：找该 agent 最近的、样本带 security 标记且已收口的
+     * 数据集 run，给出其证据结论。找不到返回 null——调用方保持原有口径不变。
+     *
+     * <p>关联路径：agent 的 trace → run item 的 traceId（快照里带 security: 标记）→ 最近一次
+     * COMPLETED run。trace 与样本的绑定由 run 受理时的快照冻结保证。</p>
+     */
+    public Map<String, Object> latestForAgent(String workspaceId, String agentKey, LocalDateTime since) {
+        List<io.emonlens.server.storage.entity.TraceSummaryEntity> traces =
+                traceSummaryMapper.selectList(Wrappers
+                        .<io.emonlens.server.storage.entity.TraceSummaryEntity>lambdaQuery()
+                        .eq(io.emonlens.server.storage.entity.TraceSummaryEntity::getWorkspaceId, workspaceId)
+                        .eq(io.emonlens.server.storage.entity.TraceSummaryEntity::getAgentKey, agentKey)
+                        .ge(io.emonlens.server.storage.entity.TraceSummaryEntity::getStartTime, since)
+                        .last("LIMIT 200"));
+        if (traces.isEmpty()) {
+            return null;
+        }
+        List<String> traceIds = traces.stream()
+                .map(io.emonlens.server.storage.entity.TraceSummaryEntity::getTraceId)
+                .collect(java.util.stream.Collectors.toList());
+        List<DatasetRunItemEntity> tagged = datasetRunItemMapper.selectList(
+                Wrappers.<DatasetRunItemEntity>lambdaQuery()
+                        .in(DatasetRunItemEntity::getTraceId, traceIds)
+                        .like(DatasetRunItemEntity::getSampleSnapshotJson, TAG_PREFIX)
+                        .last("LIMIT 200"));
+        if (tagged.isEmpty()) {
+            return null;
+        }
+        java.util.LinkedHashSet<String> runIds = new java.util.LinkedHashSet<>();
+        for (DatasetRunItemEntity item : tagged) {
+            runIds.add(item.getRunId());
+        }
+        List<DatasetRunEntity> runs = datasetRunMapper.selectList(
+                Wrappers.<DatasetRunEntity>lambdaQuery()
+                        .in(DatasetRunEntity::getId, runIds)
+                        .eq(DatasetRunEntity::getStatus, DatasetRunEntity.STATUS_COMPLETED)
+                        .isNotNull(DatasetRunEntity::getFinishedAt)
+                        .orderByDesc(DatasetRunEntity::getFinishedAt)
+                        .last("LIMIT 1"));
+        if (runs.isEmpty()) {
+            return null;
+        }
+        return evidence(runs.get(0));
+    }
+
 
     /** run 的 security 证据：按类别与 OWASP 类目汇总，并给出红线结论。 */
     public Map<String, Object> evidence(DatasetRunEntity run) {

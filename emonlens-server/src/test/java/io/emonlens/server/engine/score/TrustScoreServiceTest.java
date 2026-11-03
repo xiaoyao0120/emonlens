@@ -36,7 +36,8 @@ class TrustScoreServiceTest {
         java.lang.reflect.Method m = TrustScoreService.class
                 .getDeclaredMethod("penaltyScore", java.util.List.class, String.class);
         m.setAccessible(true);
-        TrustScoreService service = new TrustScoreService(null, null, null, null, null, null, null, null, null);
+        TrustScoreService service = new TrustScoreService(null, null, null, null, null, null, null, null,
+                null, null);
         // 200 条 HIGH finding（罚分 3000）→ 100/(1+3000/80) ≈ 2.6
         java.util.List<io.emonlens.server.storage.entity.FindingEntity> findings = new java.util.ArrayList<>();
         for (int i = 0; i < 200; i++) {

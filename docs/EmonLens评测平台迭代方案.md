@@ -321,10 +321,11 @@ EmonLens 与竞品的能力分布是互补的：
   - **功能 / 安全分开统计**：证据里同时给 `functionalPassRate` 与 `violations`，
     验收场景即「功能通过率 100% + 3 条安全违例 → BLOCKED」。
   - **导入幂等**：按 input 的 sha256 去重，重复导入只累计 skipped。
+  - 收尾更新：security run 证据已接入五维信任分的 security 维度——agent 最近一次含安全样本的
+    COMPLETED run，`VIOLATION` 直接把 security 分打到 0（红线不是"扣几分"）、证据状态 COMPLETE、
+    basis 标注 `security_run:VIOLATION`；`SECURE/INSUFFICIENT` 只补充来源说明，不凭一次通过抬高分数。
   - 已知偏差：① 攻击种子是内置的固定集合（不含 promptfoo 的 strategy 组合生成器）；
-    ② security 证据已按 OWASP 汇总并进入 Gate verification，但**尚未接入五维信任分的 security 维度**
-    （该维度目前仍只看 SECURITY 类监控 Finding）；③ 红线固定为 0，模板声明 `securityFail>0` 属于放宽，按现有
-    "政策只能更严"的规则不予支持。
+    ② 红线固定为 0，模板声明 `securityFail>0` 属于放宽，按现有"政策只能更严"的规则不予支持。
 
 #### R3-3 Judge 技术升级　✅ 已实现（CoT / 校准 few-shot / 多 judge 聚合与原文留痕）
 

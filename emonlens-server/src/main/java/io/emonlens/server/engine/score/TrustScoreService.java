@@ -53,6 +53,7 @@ public class TrustScoreService {
     private final ObjectMapper objectMapper;
     private final EmonLensProperties properties;
     private final DatasetRunEvidenceService datasetRunEvidenceService;
+    private final io.emonlens.server.engine.security.SecurityEvidenceService securityEvidenceService;
 
     /** 重算指定 agent 的窗口评分并写快照；返回快照 */
     public TrustScoreEntity recompute(String workspaceId, String agentKey, int windowHours) {
@@ -97,6 +98,38 @@ public class TrustScoreService {
         boolean outputConfigured = enabledEvaluators != null && enabledEvaluators > 0;
         List<EvalResultEntity> judgedEvals = judgedEvals(evals);
 
+        // R3-2 收尾：安全包 run 证据作为 security 维度的专属证据源。
+        // VIOLATION 直接把 security 分打到 0（红线不是"扣几分"）；
+        // SECURE / INSUFFICIENT 只补充证据来源说明，不凭一次通过就抬高分数。
+        Map<String, Object> securityRun = null;
+        try {
+            securityRun = securityEvidenceService.latestForAgent(workspaceId, agentKey, since);
+        } catch (Exception e) {
+            log.warn("security run evidence unavailable, agent={}: {}", agentKey, e.getMessage());
+        }
+        String securityRunVerdict = securityRun == null
+                ? null : String.valueOf(securityRun.get("verdict"));
+        Double securityScore = hasTraces && securityConfigured ? penaltyScore(findings, "SECURITY") : null;
+        String securityEvidenceStatus;
+        if (hasTraces && securityConfigured) {
+            securityEvidenceStatus = TrustScoreEntity.EVIDENCE_COMPLETE;
+        } else {
+            securityEvidenceStatus = securityConfigured
+                    ? TrustScoreEntity.EVIDENCE_NO_DATA : TrustScoreEntity.EVIDENCE_NOT_CONFIGURED;
+        }
+        String securityBasis = securityConfigured ? "security_monitors" : "no_security_monitor";
+        if ("VIOLATION".equals(securityRunVerdict)) {
+            securityScore = 0.0;
+            securityEvidenceStatus = TrustScoreEntity.EVIDENCE_COMPLETE;
+            securityBasis = (securityConfigured ? "security_monitors+" : "") + "security_run:VIOLATION";
+        } else if (securityRun != null) {
+            securityBasis = (securityConfigured ? "security_monitors+" : "")
+                    + "security_run:" + securityRunVerdict;
+            if ("SECURE".equals(securityRunVerdict)) {
+                securityEvidenceStatus = TrustScoreEntity.EVIDENCE_COMPLETE;
+            }
+        }
+
         Map<String, Object> performance = dimension(
                 hasTraces ? successRateScore(traces) : null,
                 hasTraces ? TrustScoreEntity.EVIDENCE_COMPLETE : TrustScoreEntity.EVIDENCE_NO_DATA,
@@ -119,11 +152,9 @@ public class TrustScoreService {
                 "eval_pass_rate", judgedEvals.size(), evals.size());
 
         Map<String, Object> security = dimension(
-                hasTraces && securityConfigured ? penaltyScore(findings, "SECURITY") : null,
-                hasTraces && securityConfigured ? TrustScoreEntity.EVIDENCE_COMPLETE
-                        : (securityConfigured ? TrustScoreEntity.EVIDENCE_NO_DATA
-                                : TrustScoreEntity.EVIDENCE_NOT_CONFIGURED),
-                securityConfigured ? "security_monitors" : "no_security_monitor",
+                securityScore,
+                securityEvidenceStatus,
+                securityBasis,
                 hasTraces ? traces.size() : 0, traces.size());
 
         Map<String, Object> context = dimension(
