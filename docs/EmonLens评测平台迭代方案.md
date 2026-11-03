@@ -284,7 +284,7 @@ EmonLens 与竞品的能力分布是互补的：
   - 复用样本契约 v2 的 turns 结构与 3 个对话预设评估器；停止条件（最大轮数 / 目标达成 / persona 满意度）；预算与缓存沿用。
 - **验收标准**：仿真会话完整入 trace 体系（可观测可回放）；成本核算分 generation / simulation / judge 三相。
 
-#### R3-2 安全评测包
+#### R3-2 安全评测包　✅ 已实现（内置攻击种子 / OWASP 映射 / Gate 安全红线）
 
 - **对标**：promptfoo redteam（plugins × strategies、OWASP LLM Top 10 映射）、DeepTeam；Weave jailbreak signal。
 - **方案要点**：
@@ -292,6 +292,21 @@ EmonLens 与竞品的能力分布是互补的：
   - 结果进入信任分 security 维度作为专属证据源；Gate 模板可声明 `securityFail=0` 红线（违例直接 BLOCKED，不吃通用 maxFail 预算）。
   - 报告按 OWASP LLM Top 10 类目映射汇总。合规边界：所有攻击样本平台本地生成 / 用户自带，仅服务评测用途，不提供对外攻击能力。
 - **验收标准**：一次 run 能同时输出功能 Gate 与 security 维度证据；红线违例即使整体通过率 100% 也 BLOCKED。
+- **实现落点**：`SecurityPackRegistry`（7 类攻击 × OWASP 映射 × 检测口径 × 本地种子）+
+  `SecurityEvidenceService`（种子导入 / 证据汇总）+ `SecurityPackController`
+  （`GET /api/v1/security/pack`、`GET /security/pack/seeds`、`POST /datasets/{id}/security-seeds`、
+  `GET /datasets/{id}/runs/{runId}/security`）+ `QualityGateService` 的 `SECURITY_REDLINE` 检查项。
+  - **样本约定**：安全样本用 `purposeTags=security:<CATEGORY>`、`riskLevel=HIGH`、`sourceType=SECURITY_SEED` 标记；
+    用户自带的样本只要按同一约定打标就进入同一套汇总，不强制只用内置种子。
+  - **红线语义**：security 样本判 FAIL = 违例；UNKNOWN/ERROR = 无法认定，二者都 BLOCKED。
+    安全告警优先于普通 FAIL 聚合——`decision` 里 BLOCKED 赢过 FAIL（违例不是"分数不够"）。
+  - **功能 / 安全分开统计**：证据里同时给 `functionalPassRate` 与 `violations`，
+    验收场景即「功能通过率 100% + 3 条安全违例 → BLOCKED」。
+  - **导入幂等**：按 input 的 sha256 去重，重复导入只累计 skipped。
+  - 已知偏差：① 攻击种子是内置的固定集合（不含 promptfoo 的 strategy 组合生成器）；
+    ② security 证据已按 OWASP 汇总并进入 Gate verification，但**尚未接入五维信任分的 security 维度**
+    （该维度目前仍只看 SECURITY 类监控 Finding）；③ 红线固定为 0，模板声明 `securityFail>0` 属于放宽，按现有
+    "政策只能更严"的规则不予支持。
 
 #### R3-3 Judge 技术升级
 

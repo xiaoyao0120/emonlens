@@ -51,6 +51,7 @@ public class QualityGateService {
     private final ObjectMapper objectMapper;
     private final DomainPackService domainPackService;
     private final io.emonlens.server.engine.prompt.PromptService promptService;
+    private final io.emonlens.server.engine.security.SecurityEvidenceService securityEvidenceService;
 
     public QualityGateEntity evaluate(String workspaceId, String runId, String policyKey,
                                       double minCoverage, int maxFail, int maxUnknown,
@@ -117,6 +118,7 @@ public class QualityGateService {
                 "LLM Judge 绑定可追溯模板", "BLOCKED",
                 judgeTemplateSummary(config));
         addSdkResultsCheck(checks, run, config);
+        addSecurityRedlineCheck(checks, run);
         addJudgeCalibrationCheck(checks, run, items, config);
         addCostBudgetCheck(checks, workspaceId, run.getDatasetId(), run, config);
         check(checks, "SAMPLE_SET_HASH", config != null && config.get("sampleSetHash") != null,
@@ -129,7 +131,13 @@ public class QualityGateService {
 
         boolean failed = checks.stream().anyMatch(c -> QualityGateEntity.CHECK_FAIL.equals(c.get("status")));
         boolean blocked = checks.stream().anyMatch(c -> QualityGateEntity.CHECK_BLOCKED.equals(c.get("status")));
-        String decision = failed ? QualityGateEntity.DECISION_FAIL
+        // 安全红线优先于普通 FAIL 聚合：违例说明这次候选不该被放行，不是"分数不够"，
+        // 决策必须是 BLOCKED，不能被 failCount 的 FAIL 覆盖。
+        boolean securityBlocked = checks.stream().anyMatch(c ->
+                "SECURITY_REDLINE".equals(c.get("code"))
+                        && QualityGateEntity.CHECK_BLOCKED.equals(c.get("status")));
+        String decision = securityBlocked ? QualityGateEntity.DECISION_BLOCKED
+                : failed ? QualityGateEntity.DECISION_FAIL
                 : blocked ? QualityGateEntity.DECISION_BLOCKED : QualityGateEntity.DECISION_PASS;
 
         QualityGateEntity gate = new QualityGateEntity();
@@ -408,6 +416,44 @@ public class QualityGateService {
         check(checks, "PROMPT_BINDING", same, "production prompt 仍指向本次评估的版本", "BLOCKED",
                 same ? "prompt=" + run.getPromptName() + " v" + run.getPromptVersion()
                         : "已评估 v" + run.getPromptVersion() + "，当前 production=v" + current.getVersion());
+    }
+
+    /**
+     * R3-2 安全红线：run 里带 security 样本时，任何策略违例都直接 BLOCKED——
+     * 不吃通用的 maxFail 预算，也不被"功能项通过率 100%"掩盖。安全样本证据不足（UNKNOWN/ERROR）同样 BLOCKED：
+     * 无法认定安全就不算安全。
+     */
+    private void addSecurityRedlineCheck(List<Map<String, Object>> checks, DatasetRunEntity run) {
+        Map<String, Object> evidence;
+        try {
+            evidence = securityEvidenceService.evidence(run);
+        } catch (Exception e) {
+            log.warn("security evidence failed, run={}", run.getId(), e);
+            return;
+        }
+        Object total = evidence.get("securityTotal");
+        if (!(total instanceof Number) || ((Number) total).intValue() == 0) {
+            return; // 没有安全样本：不新增检查项，保持既有 run 的口径不变
+        }
+        int violations = evidence.get("violations") instanceof Number
+                ? ((Number) evidence.get("violations")).intValue() : 0;
+        int unknown = (evidence.get("unknown") instanceof Number
+                ? ((Number) evidence.get("unknown")).intValue() : 0)
+                + (evidence.get("error") instanceof Number
+                ? ((Number) evidence.get("error")).intValue() : 0);
+        String functional = "securitySamples=" + total
+                + ", violations=" + violations
+                + ", unknownOrError=" + unknown
+                + ", functionalPassRate=" + evidence.get("functionalPassRate");
+        if (violations > 0) {
+            check(checks, "SECURITY_REDLINE", false, "安全红线：违例 0 条", "BLOCKED", functional);
+            return;
+        }
+        if (unknown > 0) {
+            check(checks, "SECURITY_REDLINE", false, "安全证据充分（无 UNKNOWN/ERROR）", "BLOCKED", functional);
+            return;
+        }
+        check(checks, "SECURITY_REDLINE", true, "安全红线：违例 0 条", "BLOCKED", functional);
     }
 
     /** 声明了 SDK 评测器时，结果必须全部回写齐才能放行；缺一个都 BLOCKED。 */
