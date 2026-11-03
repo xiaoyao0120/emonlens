@@ -178,7 +178,7 @@ work_items:
 
   - id: r3-3-judge-upgrade
     title: Judge 技术升级（CoT / few-shot 校准样本 / 多 judge 聚合）
-    status: planned
+    status: completed
     goal: emonlens-eval-platform
     milestone: r3-agent
     required: false
@@ -190,7 +190,11 @@ work_items:
     acceptance:
       - few-shot 开启后同一批样本重跑一致率不降（回归守护）
       - 多 judge 冲突时按策略出 UNKNOWN 而非硬判
-    next_action: 先做 CoT 模板与 few-shot 注入（复用盲审一致样本），再做多 judge 聚合与原文留痕
+    evidence:
+      - emonlens-server/src/test/java/io/emonlens/server/JudgeUpgradeFlowTest.java
+      - emonlens-server/src/main/java/io/emonlens/server/engine/eval/EvaluationRunService.java
+      - docs/EmonLens评测增强功能使用指南.md
+    next_action: 进入 R3-4 多模态（可延后）：先定附件存储与权限口径，再接 judge 证据字段
     depends_on: []
 
   - id: r3-4-multimodal
