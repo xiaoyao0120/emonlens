@@ -40,6 +40,8 @@ import io.emonlens.server.storage.mapper.FindingMapper;
         "emonlens.eval.auto-run-enabled=false",
         "emonlens.feedback.finding-threshold=2",
         "emonlens.feedback.rate-limit-per-minute=20",
+        "emonlens.feedback.categorical-positive=方案可行,thumbs-up",
+        "emonlens.feedback.categorical-negative=太慢了",
         "emonlens.security.login-ip-limit-per-minute=0"})
 @AutoConfigureMockMvc
 class EndUserFeedbackFlowTest extends AbstractIntegrationTest {
@@ -104,13 +106,13 @@ class EndUserFeedbackFlowTest extends AbstractIntegrationTest {
     @Test
     void submitTypedFeedbackLandsInEvalResult() throws Exception {
         String traceId = traceWithInput("fb-numeric", "fb-agent", "我的订单到哪了");
-        String token = issueToken(traceId, 5, 60).path("data").path("token").asText();
+        String token = issueToken(traceId, 10, 60).path("data").path("token").asText();
         assertThat(token).startsWith("fb_");
 
         JsonNode numeric = publicSubmit(token, Map.of("kind", "NUMERIC", "valueNum", 9.0));
         assertThat(numeric.path("code").asInt()).as("numeric: %s", numeric).isZero();
         assertThat(numeric.path("data").path("label").asText()).isEqualTo("PASS");
-        assertThat(numeric.path("data").path("remainingUses").asInt()).isEqualTo(4);
+        assertThat(numeric.path("data").path("remainingUses").asInt()).isEqualTo(9);
 
         JsonNode bool = publicSubmit(token, Map.of("kind", "BOOLEAN", "valueText", "down"));
         assertThat(bool.path("data").path("label").asText()).isEqualTo("FAIL");
@@ -122,10 +124,24 @@ class EndUserFeedbackFlowTest extends AbstractIntegrationTest {
                 "correction", "您的订单预计明天 10 点前送达"));
         assertThat(correction.path("data").path("label").asText()).isEqualTo("FAIL");
 
+        // R2-2 收尾：配置词表命中判 PASS/FAIL，未配置的仍 UNKNOWN
+        JsonNode customPositive = publicSubmit(token, Map.of("kind", "CATEGORICAL",
+                "valueText", "方案可行"));
+        assertThat(customPositive.path("data").path("label").asText())
+                .as("自定义正面词应判 PASS: %s", customPositive).isEqualTo("PASS");
+        JsonNode customNegative = publicSubmit(token, Map.of("kind", "CATEGORICAL",
+                "valueText", "太慢了"));
+        assertThat(customNegative.path("data").path("label").asText())
+                .as("自定义负面词应判 FAIL: %s", customNegative).isEqualTo("FAIL");
+        JsonNode unlisted = publicSubmit(token, Map.of("kind", "CATEGORICAL",
+                "valueText", "还行吧"));
+        assertThat(unlisted.path("data").path("label").asText()).isEqualTo("UNKNOWN");
+
         List<EvalResultEntity> results = feedbackResults(traceId);
-        assertThat(results).hasSize(4);
+        assertThat(results).hasSize(7);
         assertThat(results).extracting(EvalResultEntity::getLabel)
-                .containsExactlyInAnyOrder("PASS", "FAIL", "FAIL", "FAIL");
+                .containsExactlyInAnyOrder("PASS", "FAIL", "FAIL", "FAIL",
+                        "PASS", "FAIL", "UNKNOWN");
         assertThat(results).allSatisfy(r -> {
             assertThat(r.getReason()).contains("end-user feedback");
             // 纠正正文不能进 reason（正文受内容权限约束）
@@ -133,8 +149,9 @@ class EndUserFeedbackFlowTest extends AbstractIntegrationTest {
         });
 
         JsonNode list = readTree(get("/api/v1/traces/" + traceId + "/feedback"));
-        assertThat(list.path("data")).hasSize(4);
-        assertThat(list.path("data").get(0).path("hasCorrection").asBoolean()).isTrue();
+        assertThat(list.path("data")).hasSize(7);
+        // 最新一条在前：还行吧（UNKNOWN）
+        assertThat(list.path("data").get(0).path("valueText").asText()).isEqualTo("还行吧");
     }
 
     // ---------- 2. 配额 / 过期 / 吊销 ----------

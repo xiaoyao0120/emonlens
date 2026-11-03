@@ -54,7 +54,7 @@ mvn -B -o test     # 322 用例
    意外丢失，接口默认实现静默退化为纯文本（编译无信号）。修复后 `javap` 验证 boot jar 字节码 +
    真机 E2E 实测 `reason: vision parts=1`（run PASS）。
 2. **R2-1 SPAN scope 复用 TRACE 语义**；Evaluation Monitor 分母未随 scope 调整。
-3. **R2-2** 分类标签为内置词表；token 限流是单实例内存计数。
+3. **R2-2** 分类标签已开放配置词表（`categorical-positive/negative`，收尾完成）；token 限流是单实例内存计数（分布式需引入 Redis）。
 4. **R2-3** 缓存指标按工作空间汇总未拆到评估器；蓝图覆盖只标注是否配置。
 5. **R2-4** 复跑已支持 `{"count":N}` 批量（容量不足如实返回 created/refused，真机实测）；散点仅成本横轴（自绘 SVG）。
 6. **R3-1** 仅 HTTP 直连（SDK runner 未实现）；目标达成靠模拟用户自评；被测 Agent 的 HTTP 调用无法由平台计量（模拟用户 LLM 调用已在预算熔断内，收尾时修正了此前错误记载）。

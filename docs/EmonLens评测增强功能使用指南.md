@@ -1270,6 +1270,8 @@ curl -s -X POST "$HOST/api/v1/traces/$TRACE_ID/feedback/$FEEDBACK_ID/dataset" \
 | `emonlens.feedback.finding-threshold` | 3 | 触发 Finding 的负面反馈条数 |
 | `emonlens.feedback.finding-window-hours` | 24 | 阈值统计窗口 |
 | `emonlens.feedback.finding-severity` | MEDIUM | Finding 严重级 |
+| `emonlens.feedback.categorical-positive` | （空） | CATEGORICAL 自定义正面词（逗号分隔，与内置词表合并） |
+| `emonlens.feedback.categorical-negative` | （空） | CATEGORICAL 自定义负面词（逗号分隔） |
 
 ---
 

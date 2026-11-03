@@ -338,17 +338,39 @@ public class EndUserFeedbackService {
         return null;
     }
 
+    /**
+     * CATEGORICAL 判定：内置词表 + 配置词表（`emonlens.feedback.categorical-positive/negative`，
+     * 逗号分隔）合并生效；都不命中才是 UNKNOWN。配置项让业务自己的评语不被迫落到 UNKNOWN。
+     */
     private String categoricalLabel(String text) {
         String value = text.trim().toLowerCase();
-        if (List.of("good", "great", "helpful", "positive", "满意", "好", "有用", "正确", "5", "4")
-                .contains(value)) {
+        List<String> positives = new ArrayList<>(List.of("good", "great", "helpful", "positive",
+                "满意", "好", "有用", "正确", "5", "4"));
+        positives.addAll(splitWords(properties.getFeedback().getCategoricalPositive()));
+        if (positives.contains(value)) {
             return "PASS";
         }
-        if (List.of("bad", "poor", "unhelpful", "negative", "不满意", "差", "无用", "错误", "1", "2")
-                .contains(value)) {
+        List<String> negatives = new ArrayList<>(List.of("bad", "poor", "unhelpful", "negative",
+                "不满意", "差", "无用", "错误", "1", "2"));
+        negatives.addAll(splitWords(properties.getFeedback().getCategoricalNegative()));
+        if (negatives.contains(value)) {
             return "FAIL";
         }
         return "UNKNOWN";
+    }
+
+    private List<String> splitWords(String raw) {
+        List<String> words = new ArrayList<>();
+        if (raw == null || raw.isBlank()) {
+            return words;
+        }
+        for (String word : raw.split(",")) {
+            String trimmed = word.trim().toLowerCase();
+            if (!trimmed.isEmpty()) {
+                words.add(trimmed);
+            }
+        }
+        return words;
     }
 
     // ==================== 内部：落评估结果 / 触发 Finding ====================

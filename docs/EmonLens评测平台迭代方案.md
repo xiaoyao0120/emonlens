@@ -227,7 +227,8 @@ EmonLens 与竞品的能力分布是互补的：
     不会每条差评都开一条。
   - **转样本**：只有 correction 类可收录；输入取 trace 的 `inputPreview`，期望输出取纠正内容，
     走 `EvaluationCaseService.validate`（超长/非法直接 400，不静默截断）。
-  - 已知偏差：categorical 目前是内置词表映射（不提供自定义标签体系）；token 限流是单实例内存窗口，
+  - 已知偏差：categorical 为「内置词表 + `emonlens.feedback.categorical-positive/negative` 配置词表」
+    合并映射（收尾已开放自定义词，完整自定义标签体系仍需立项）；token 限流是单实例内存窗口，
     多实例部署时各实例独立计数（仍能挡住脚本刷量，但不是全局限额）。
 
 #### R2-3 评估器质量看板　✅ 已实现（一致率 / UNKNOWN 率 / 成本 / 数据集腐烂 / 告警接入）

@@ -245,6 +245,12 @@ public class EmonLensProperties {
         private int findingThreshold = 3;
         private int findingWindowHours = 24;
         private String findingSeverity = "MEDIUM";
+        /**
+         * R2-2 收尾：CATEGORICAL 反馈的自定义词表（逗号分隔，命中即判 PASS/FAIL）。
+         * 与内置词表合并生效——业务自己的评语（如「太慢了」「方案可行」）不再被迫落到 UNKNOWN。
+         */
+        private String categoricalPositive = "";
+        private String categoricalNegative = "";
     }
 
     @Data
