@@ -1,6 +1,8 @@
 # EmonLens 评测平台迭代方案
 
 > 版本：v1（2026-11-03）。基于 0.1.0（评测体系 3.0 + V1.1 增强）现状盘点。
+> 状态更新（0.2.0）：R1 四特性已全部落地（R1-1 SDK 评测器、R1-2 矩阵实验、R1-3 prompt × 实验、R1-4 GitHub Action），
+> 下文 R1 各节已标注「✅ 已实现」与实现落点；R2/R3 保持规划状态，按 0.3.0 / 0.4.0 窗口推进。
 > 对标：Braintrust、LangSmith、W&B Weave（商业）；DeepEval、Ragas、promptfoo、Langfuse、Arize Phoenix（开源）。
 > 面向：维护者与贡献者，用于规划 0.2.x – 0.4.x 的评测能力演进。
 
@@ -114,7 +116,7 @@ EmonLens 与竞品的能力分布是互补的：
 
 > 目标一句话：让用户能在自己的 Python 里写评测器、在 Playground 里跑矩阵、在 PR 里看到门禁结论。
 
-#### R1-1 SDK 自定义评测器（push 模式）
+#### R1-1 SDK 自定义评测器（push 模式）　✅ 已实现（0.1.0 → R1，含账本口径 / eval:content scope / SDK_EVALUATORS Gate 检查项 / 宽限清理）
 
 - **对标**：Braintrust code scorers、LangSmith code evaluator、DeepEval `BaseMetric`。竞品共性是「评测代码在用户环境跑，平台只收结果」，这与 EmonLens「Java 单进程 + 不替用户执行任意代码」的安全边界天然契合，不做服务端代码执行。
 - **方案要点**：
@@ -128,7 +130,7 @@ EmonLens 与竞品的能力分布是互补的：
   3. 无 `TRACE_CONTENT` 权限时样本正文脱敏下发，仅给 hash 与标签；
   4. `--wait --assert` 对含 SDK 评测器的 run 语义不变。
 
-#### R1-2 Playground 矩阵实验 + Diff
+#### R1-2 Playground 矩阵实验 + Diff　✅ 已实现（0.2.0：矩阵 / 预估硬确认 / 网格并发 / 逐格评分 / CSV / Diff + TRADEOFF）
 
 - **对标**：Braintrust Tasks × dataset rows + Diff mode；promptfoo 矩阵。
 - **方案要点**：
@@ -136,8 +138,16 @@ EmonLens 与竞品的能力分布是互补的：
   - Diff：指定一列为 base，其余列与之逐样本比较——确定性变化直接标，语义变化复用 PairwiseEvaluationService 出 Improvement / Regression / Tradeoff / TIE。
   - 成本预估在启动前给出（复用既有 byModel 计价）。
 - **验收标准**：矩阵跑完能导出网格 CSV；Diff 结论可追溯到逐样本偏好记录；单格失败不中断整批。
+- **实现落点**：`et_playground_matrix` / `et_playground_cell` / `et_playground_diff` / `et_playground_diff_item`；
+  `PlaygroundMatrixService`（预估、受理、网格执行、Diff、CSV、升格）+ `PlaygroundMatrixWorker` + `PlaygroundMatrixController`
+  （`/api/v1/playground/matrices`）；成对判定口径抽成 `PairwiseJudge`，由 dataset run 的 PairwiseEvaluation 与矩阵 Diff 共用；
+  UI 新增「矩阵实验」页（`MatrixView.vue`）。
+  - 成本护栏：`POST /matrices/estimate` 先给预估，受理必须 `confirmEstimate=true`；默认上限 20 样本 × 8 列 / 200 格 / 1000 次外部调用。
+  - 确定性变化按输出 hash + 归一化文本比对；语义偏好把目标列当候选 B（B 胜=改进，A 胜=退步），
+    偏好与评估结论冲突时给 `TRADEOFF`（`PREFERENCE_UP_SCORE_DOWN` / `PREFERENCE_DOWN_SCORE_UP`）。
+  - 单格失败写 `ERROR` 且矩阵落 `PARTIAL`，其余格照常有结论。
 
-#### R1-3 Prompt 版本 × 实验打通
+#### R1-3 Prompt 版本 × 实验打通　✅ 已实现（0.2.0：run 绑定 prompt 版本 / 指纹含 prompt / production 指针移动使 Gate 失效 / 升格 / 反向查 run）
 
 - **对标**：Braintrust prompt 环境标签 + promotion；LangSmith prompt commit history。
 - **方案要点**：
@@ -145,20 +155,34 @@ EmonLens 与竞品的能力分布是互补的：
   - Playground「转正式实验」：矩阵列一键升格为 dataset run，沿用冻结语义。
   - label 语义收紧：`production` label 全局唯一，resolve 留审计日志；SDK 增加 `emonlens.get_prompt(name, label="production")`。
 - **验收标准**：从 prompt 版本能回答「它被哪些 run 评过、Gate 结论是什么」；两次 run 用不同 prompt 版本时 run diff 给出不可比或降级提示。
+- **实现落点**：`PromptService`（解析 / 内容 hash / 解析留痕 `et_prompt_resolution`）；run 新增 `prompt_name/version/label/hash` 列，
+  `candidateFingerprint` 纳入 prompt 内容 hash；Gate 新增 `PROMPT_BINDING` 检查项，verification 增加
+  `PROMPT_PRODUCTION_MOVED` / `PROMPT_PRODUCTION_MISSING` 失效原因；`GET /prompts/{name}/runs` 反查评估证据；
+  `POST /playground/matrices/{id}/columns/{key}/promote` 升格（幂等键由矩阵 + 列推导）；
+  run diff 增加 `promptComparison` 降级提示（版本不同仍可比，但只说明相对差异）。
+  - label 收紧：新建版本声明 production 时自动从同名旧版本摘除（此前会出现两个版本同时带 production）。
+  - SDK `get_prompt` 已存在，本次接入同一套解析口径并在数据面 resolve 留痕（source=SDK），响应增加 `promptHash`。
 
-#### R1-4 GitHub Action + PR 评论
+#### R1-4 GitHub Action + PR 评论　✅ 已实现（0.2.0：composite Action / 幂等评论 / 基线 run 标签 / 提交号回溯）
 
 - **对标**：Braintrust / promptfoo 官方 Action；DeepEval pytest 门禁。
 - **方案要点**：
   - 发布官方 composite Action：内部执行 `emonlens eval run --wait --assert` + `gate check`，把通过率 / 覆盖率 / Gate 结论 / 与基线 run 的 diff 摘要渲染成 PR 评论（评论幂等更新，不刷屏）。
   - 基线 run 由 dataset 绑定（如 `baseline` 标签），CI 注入 commit SHA 使候选指纹可追溯。
 - **验收标准**：PR 上一次评论可反复更新；Gate 非 PASS 时 Action 失败退出并在评论里给出检查项清单。
+- **实现落点**：根目录 `action.yml`（composite，setup-python → 安装仓库内 SDK → 跑评测并写 report → 渲染评论 → 用 CLI 退出码决定 job 结果）；
+  SDK 新增 `emonlens.ci`（纯函数渲染 + GitHub 评论 upsert，按隐藏 marker 幂等更新）与 `emonlens ci comment` 子命令；
+  CLI 新增 `--prompt-name/--prompt-version/--prompt-label/--run-label/--commit-sha/--baseline-label/--report-json`、
+  `gate check --run-id`；开放 API 新增基线解析 `GET /open/eval-runs?datasetId=&label=` 与 diff 摘要
+  `GET /open/eval-runs/{runId}/diff`；`et_dataset_run` 增加 `run_label`（同数据集内唯一）/`commit_sha`，
+  提供 `POST /datasets/{id}/runs/{runId}/label` 打标。示例工作流见 `docs/examples/github-action-eval.yml`。
+  - 评论只含计数、检查项与标识，不含样本正文；Gate verification 不可用时明确写「不得作为放行依据」。
 
 ### R2（0.3.0）：在线评估与反馈闭环
 
 > 目标一句话：让线上质量可持续度量，把真实用户的反馈变成评测样本。
 
-#### R2-1 评估规则 v2（scope / filter / 回溯）
+#### R2-1 评估规则 v2（scope / filter / 回溯）　✅ 已实现（规则对象 / 过滤 / 采样与预算 / 命中幂等 / SESSION 聚合 / Rewind）
 
 - **对标**：Braintrust online scoring（Trace / Span / Group 三层 + per-rule 采样 + Rewind）；Langfuse filter + 采样率。
 - **方案要点**：
@@ -167,6 +191,20 @@ EmonLens 与竞品的能力分布是互补的：
   - Rewind：按 filter 圈选历史 trace 批量补评（限速、可暂停、幂等），结果照常进账本与 Monitor。
   - Monitor 阈值判定保持独立层（复用 EvaluationMonitorChecker），但分母口径随 scope 走。
 - **验收标准**：同一 trace 命中多条规则时结果可归并去重；Rewind 跑完的 trace 不重复评；SESSION 评估在报告中有独立汇总。
+- **实现落点**：`et_eval_rule` / `et_eval_rule_hit` / `et_eval_rewind_job` 三张表 + `et_eval_result` 增列
+  `scope` / `session_id` / `rule_key`；`EvaluationRuleService`（规则维护、过滤匹配、采样与预算、归并去重、SESSION 聚合、
+  汇总）+ `EvaluationRewindService`（作业游标、限速、暂停/恢复/取消）+ `EvaluationRuleWorker`（`@Scheduled` 推进）
+  + `EvaluationRuleController`（`/api/v1/eval-rules`，含 `/summary` 与 `/rewinds`）。
+  - **向后兼容**：工作空间没有启用规则时仍走旧的全局采样，升级不改变既有行为；删除/禁用全部规则即回退。
+  - **幂等**：命中账本唯一键 `(rule_key, subject_id)`——同一规则对同一 trace / 会话只评估一次，
+    Rewind 重跑与重复完成事件都不会重复花钱；小时预算也按账本计数（进程重启不清零）。
+  - **归并去重**：一次 trace 完成里多条规则命中时按 `priority` 消费评估器，同一评估器只跑一次，后续规则记 `DEDUPED`。
+  - **SESSION**：会话按 `session_idle_minutes` 空闲后评估一次，主体写成 `session:<id>`（不污染真实 trace 的
+    `(evaluator, trace, attempt)` 唯一键），结论带 `scope=SESSION`，在 `/summary` 的 `byScope` 里独立汇总。
+  - **Rewind**：按 `(start_time, trace_id)` 游标推进，`ratePerMinute/12` 控制每轮批量；暂停只改作业状态、保留游标。
+  - 已知偏差（后续补齐）：① SPAN scope 暂按 TRACE 的正文口径处理（当前 span 级证据通过 trace 正文采集实现，
+    独立 span 采样需要 span→content 映射先落地）；② Monitor 阈值判定的分母口径未随 scope 调整，
+    仍是「按 agentKey + evaluatorKey 的最近 N 条结果」，需要等 SESSION 结果的统计口径统一后再改。
 
 #### R2-2 端用户反馈采集
 
@@ -246,7 +284,9 @@ EmonLens 与竞品的能力分布是互补的：
 
 ## 6. 版本节奏建议
 
-- 0.2.0：R1 四特性 + 文档（评测增强指南 v2.2 → 迭代并入主指南）。
+- 0.2.0：R1 四特性 + 文档（评测增强指南 v2.2 → 迭代并入主指南）。**已发布**：R1-1/R1-2/R1-3/R1-4 全部落地，
+  验收项由 `PlaygroundMatrixFlowTest`（矩阵/Diff/升格/prompt 失效）、`SdkEvalFlowTest`（SDK 评测器）与
+  `emonlens-sdk-python/tests/test_ci.py`（PR 评论幂等）覆盖。
 - 0.3.0：R2 四特性，评估规则 v2 含一次不兼容 spec 升级（提供迁移 SQL，沿用幂等迁移约定）。
 - 0.4.0：R3 按依赖顺序落地（安全包 → 仿真 → judge 升级 → 多模态），多模态视需求可顺延。
 - 每个 window 结束跑一次 `make verify`，SDK 变更同步 `emonlens-sdk-python` 用例与 `make sdk-test`。

@@ -96,7 +96,7 @@ docker tag emonlens/server:0.1.0 emonlens/server:latest   # 可选
 
 ```bash
 make dist
-# 产物：emonlens-dist/target/emonlens-0.1.0-bin.tar.gz（约 31MB）
+# 产物：emonlens-dist/target/emonlens-0.2.0-bin.tar.gz（约 31MB）
 ```
 
 前置：**JDK/JRE 11+**、**MySQL 8.0**（utf8mb4）。分发件不含数据库。
@@ -315,6 +315,11 @@ docker compose logs mysql # 数据库日志
   mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-16-eval-cache.sql
   mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-23-dataset-synthesis.sql
   mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-30-dataset-item-hash-index.sql
+  # 0.2.0：Playground 矩阵 / prompt 版本绑定 / CI 基线（含 SDK 评测器任务类型列）
+  mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-12-07-eval-task-type.sql
+  mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-10-playground-matrix-prompt-binding.sql
+  # R2-1：评估规则 v2（规则对象 / 命中账本 / Rewind 作业 / eval_result 增列）
+  mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-11-eval-rule-v2.sql
   ```
 
   脚本均可重复执行；pilot 脚本开头会输出重复明细预检，若返回行或唯一键创建失败，

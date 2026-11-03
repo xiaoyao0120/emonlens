@@ -55,6 +55,13 @@ public class EvalResultEntity {
     private Integer promptTokens;
     private Integer completionTokens;
 
+    /** 评估口径（R2-1）：TRACE / SESSION；历史结果为 null，按 TRACE 处理 */
+    private String scope;
+    /** SESSION scope：所属会话；TRACE scope 为 null（会话可从 trace 反查） */
+    private String sessionId;
+    /** 产出该结论的评估规则 key（R2-1）；手动评估为 null */
+    private String ruleKey;
+
     private LocalDateTime createdAt;
 
     /** 数据集运行原因码（仅内存传递，不落 et_eval_result） */

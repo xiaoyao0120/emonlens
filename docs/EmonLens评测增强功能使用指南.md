@@ -1,6 +1,6 @@
 # EmonLens 评测增强功能使用指南
 
-> 适用版本：0.1.0 + 2026-11 评测增强迁移（样本契约 v2、Judge 模板与 CLAIMS、TRAJECTORY、批量导入导出、数据集合成、评测缓存、SDK/CLI）。
+> 适用版本：0.2.0（在 0.1.0 评测增强基础上新增：Playground 矩阵实验与 Diff、Prompt 版本 × 实验打通、GitHub Action 与 PR 评论）。
 > 面向：要落地 RAG / Agent / 多轮评测的评测同学、Agent 负责人和 CI 维护者。
 > 本文只讲“怎么用、字段怎么填、失败怎么查”。评测准入的整体流程见《EmonLens评测与准入操作指南》；部署与环境变量见《EmonLens部署运维手册》。
 
@@ -20,6 +20,10 @@
 | 评测缓存 | 配置开关 | 重复 Judge 调用不重复付费 | 默认关闭 |
 | 成本报告 | `GET /api/v1/datasets/{id}/runs/{runId}/cost`；运行报告成本区 | 按阶段/模型/评估器看 token 与费用 | 可用 |
 | SDK / CLI | `emonlens` Python 包 | CI 提交评测、等待结果、校验历史 Gate | 可用；需开放 API Token |
+| 矩阵实验（0.2.0） | 构建 →「调试与提示词」→「矩阵实验」 | 一次跑「数据集 × prompt 版本 × 模型」网格，看谁的输出更好 | 可用；默认 20 样本 × 8 列 |
+| 矩阵 Diff（0.2.0） | 矩阵详情 → Diff | 逐样本给出改进 / 退步 / 有得有失 / 持平 | 可用；语义判定消耗 judge 调用 |
+| Prompt 版本绑定（0.2.0） | run 请求带 `promptName`/`promptVersion` | 回答「这次 run 评的是哪个 prompt 版本」 | 可用；绑定后进候选指纹 |
+| CI 门禁 Action（0.2.0） | 仓库根 `action.yml` | PR 上跑评测并把 Gate 结论回写成评论 | 可用；需 `pull-requests: write` |
 
 **三条使用原则：**
 
@@ -56,6 +60,7 @@
 | `emonlens.eval.llm.initial-backoff-ms` | — | `500` | 首次重试退避 |
 | `emonlens.eval.llm.max-backoff-ms` | — | `5000` | 最大退避 |
 | `emonlens.eval.llm.jitter` | — | `0.3` | 退避抖动比例 |
+| `emonlens.eval.sdk-result-grace-hours` | — | `24` | SDK 评测器结果回写宽限期；超时未回写按 SKIPPED 收敛 |
 | `emonlens.dataset-synthesis.enabled` | `EMONLENS_DATASET_SYNTHESIS_ENABLED` | `false` | 允许创建合成任务 |
 | `emonlens.dataset-synthesis.max-candidates` | — | `50` | 单任务候选硬上限 |
 | `emonlens.dataset-synthesis.min-quality` | — | `0.6` | critic 默认阈值 |
@@ -77,7 +82,7 @@
 
 没有 `TRACE_CONTENT` 时：页面隐藏正文，导出只含标签、状态和 hash；添加/编辑样本、导入、创建合成任务、批准候选都会被拒绝（避免盲编辑把正文覆盖为空）；合成任务的 source/payload 和候选过滤原因备注也会被裁剪；运行报告中的 input/expected、检索上下文、期望工具、多轮、期望、claim 原文/理由会被移除，只保留 `claimAggregate` 的计数与比例。不要用“没有正文”判断样本为空。
 
-开放 API Token 在「系统设置 → API Token」签发，明文只显示一次；根据用途勾选 `eval:run`、`eval:read`、`score:read`。请求头是 `X-Api-Token: eak-...`，不要和数据面的 Ingest Key 混用。
+开放 API Token 在「系统设置 → API Token」签发，明文只显示一次；根据用途勾选 `eval:run`、`eval:read`、`eval:content`、`score:read`。请求头是 `X-Api-Token: eak-...`，不要和数据面的 Ingest Key 混用。`eval:content` 只用于 SDK 评测器拉取样本载荷（含正文）；没有它时 sdk-tasks 只回传 hash 与状态。
 
 ### 2.4 数据库迁移
 
@@ -89,6 +94,7 @@ mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-09-judge-templat
 mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-16-eval-cache.sql
 mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-23-dataset-synthesis.sql
 mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-30-dataset-item-hash-index.sql
+mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-12-07-eval-task-type.sql
 ```
 
 迁移只加表/加列/加索引，不改写旧样本。旧样本保持 `schemaVersion=1`，旧 run 和 Gate 继续按原样读取。
@@ -608,6 +614,53 @@ curl -X POST "$HOST/api/v1/evaluators" \
 curl "$HOST/api/v1/evaluators/presets" -H "Authorization: Bearer $JWT"
 ```
 
+### 6.7 SDK 评测器（自定义 Python scorer）
+
+需要表达"表达式/正则/Judge 都写不出来的判定逻辑"（金额核算、领域校验、内部 SDK 调用）时，用 SDK 评测器：**服务端只声明输入契约，判定代码在你的环境执行，结果经开放 API 回写任务账本**。服务端不执行任何用户代码。
+
+**创建评估器**：类型选 `SDK`，填「输入契约」（requiredFields，如 `input, candidate_output, expected_output`）与可选 `scorerRef`（ scorer 代码的人类可读引用，仅留痕）。
+
+**写 scorer**（`my_scorers.py`）：
+
+```python
+import emonlens
+
+@emonlens.scorer("amount-check")
+def check(sample: emonlens.SdkSample):
+    # sample.input / sample.candidate_output / sample.expected_output 等快捷属性
+    # sample.missing_fields() 返回契约声明但载荷缺失的字段（建议此时返回 UNKNOWN）
+    if sample.missing_fields():
+        return {"verdict": "UNKNOWN", "reasonCode": "EVIDENCE_MISSING"}
+    return sample.expected_output in (sample.candidate_output or "")
+```
+
+返回值按宽容度归一：`bool`（True=PASS/False=FAIL）、0–1 数值（score）、
+`dict`（`verdict/score/reason/reasonCode`）或 `emonlens.ScorerResult`。
+scorer 抛异常按 `ERROR` 记账（reasonCode `SCORER_RAISED`），不会让整批回写失败。
+
+**运行**（run 终态后自动拉取任务、执行、回写）：
+
+```bash
+emonlens eval run --dataset ds-... --evaluator ev-... --wait   --sdk-runner ./my_scorers.py --assert
+
+# 对已有 run 补跑 / 重放 scorer（幂等重复返回 DUPLICATE，不重复记账）
+emonlens eval sdk --run run-... --runner ./my_scorers.py
+```
+
+```python
+summary = emonlens.run_sdk_scorers(run_id, "./my_scorers.py")
+summary["applied"]   # 成功回写数
+summary["conflicts"] # 与已落账本结论冲突数（终态不可覆盖）
+```
+
+**语义与口径**：
+
+- worker 执行样本时跳过 SDK 评估器；其样本级结论先按 `UNKNOWN`（reasonCode `AWAITING_SDK_RESULTS`）占位参与聚合，**计数守恒在任意时刻成立**；
+- 结果回写后按任务账本重聚合该样本并刷新 run 计数；迟到的重复回写返回 `DUPLICATE`，与已落结论不一致返回 `CONFLICT`；
+- Token 需要 `eval:read`（拉任务）+ `eval:run`（回写）；样本正文还要求 `eval:content`，没有它时载荷只含 hash 与状态；
+- run 终态后超过 `emonlens.eval.sdk-result-grace-hours`（默认 24h）仍未回写的任务按 `SKIPPED`（`SDK_RESULT_NOT_RECEIVED`）收敛；
+- Gate 新增检查项 `SDK_EVALUATORS`：声明了 SDK 评估器但结果未收齐 → `BLOCKED`，CI 不得放行。
+
 ---
 
 ## 7. 运行、结果与成本
@@ -745,6 +798,14 @@ emonlens.assert_test(result, fail_on=["FAIL", "BLOCKED"])
 # 校验历史 Gate；CI 必须消费 usable + decision
 verification = emonlens.gate_check("gate-id")
 assert verification["usable"] and verification["decision"] == "PASS"
+
+# SDK 评测器：注册 scorer 并回写结果（详见 §6.7）
+@emonlens.scorer("amount-check")
+def amount_check(sample: emonlens.SdkSample):
+    return sample.expected_output in (sample.candidate_output or "")
+
+summary = emonlens.run_sdk_scorers(run_id, {"amount-check": amount_check})
+assert summary["conflicts"] == 0
 ```
 
 `evaluate` 自动生成 `Idempotency-Key`；在 CI 重试同一提交时，建议显式传 `idempotency_key`，避免重复创建 run。
@@ -771,11 +832,17 @@ emonlens eval run --dataset ds-... --evaluator eval-1 --json
 # 断言模式：FAIL/BLOCKED/UNKNOWN 非零退出
 emonlens eval run --dataset ds-... --evaluator eval-1 --wait --assert
 
+# SDK 评测器：run 终态后执行本地 scorer 并回写（自动启用 --wait）
+emonlens eval run --dataset ds-... --evaluator ev-... --wait --sdk-runner ./my_scorers.py
+
+# 对已有 run 执行 SDK scorer（幂等；可重放）
+emonlens eval sdk --run run-... --runner ./my_scorers.py
+
 # 校验历史 Gate
 emonlens gate check --gate-id gate-... --json
 ```
 
-CLI 支持的 `eval run` 参数：`--dataset`、`--suite`、`--evaluator`（可重复）、`--mode`、`--revision`、`--candidate-label`、`--wait`、`--timeout`、`--poll-interval`、`--json`、`--assert`。`--system-prompt`、`--model`、预算、`reviewMode` 等参数目前只在 Python API/开放 API 中可用。
+CLI 支持的 `eval run` 参数：`--dataset`、`--suite`、`--evaluator`（可重复）、`--mode`、`--revision`、`--candidate-label`、`--wait`、`--timeout`、`--poll-interval`、`--json`、`--assert`、`--sdk-runner`。`--system-prompt`、`--model`、预算、`reviewMode` 等参数目前只在 Python API/开放 API 中可用。
 
 ### 8.5 退出码
 
@@ -844,6 +911,12 @@ CI 示例：
 - [ ] 开启缓存后重跑同一 REPLAY：第二次 `cacheHit=true`，成本报告 `cache.hits=1`、`hitRate=100`（单次评估命中时）。
 - [ ] 用 CLI `--wait --assert` 跑通；历史 Gate `gate check` 退出码符合预期。
 - [ ] 含 Judge 的 run 在未完成盲审时 Gate 为 BLOCKED；完成至少 10 条盲审且一致率 ≥80% 后再生成 Gate。
+- [ ] 矩阵：预估给出格数/调用数/成本；未确认 `confirmEstimate` 时受理被拒；跑完能导出 CSV。
+- [ ] 矩阵 Diff：输出完全一致的列给出 `SAME` + `TIE`（不产生 judge 调用）；偏好与评估冲突时给出 `TRADEOFF`。
+- [ ] 绑定了 `production` prompt 的 run 在 production 换版后，`gate check` 返回不可用且原因含 `PROMPT_PRODUCTION_MOVED`。
+- [ ] `GET /api/v1/prompts/{name}/runs` 能回答「这条 prompt 版本被哪些 run 评过、Gate 结论是什么」。
+- [ ] 同一数据集打两次 `baseline` 标签后，按标签只有一条 run 命中。
+- [ ] CI：`emonlens eval run --report-json` + `emonlens ci comment --dry-run` 能在本地渲染出带结论与检查项的评论。
 
 ---
 
@@ -873,4 +946,246 @@ CI 示例：
 - 界面上的状态、严重级、类型、决策等枚举统一显示中文（如 OPEN→待处理、HIGH→高、PASS→通过、REPLAY→重放）；技术代码保留在悬停提示里，便于与 API/日志对账。
 - 枚举字典集中在 `emonlens-ui/src/common/i18n.js`，已按 `zh / en` 双语结构组织，并提供 `setLocale()`；后续接入“系统设置/用户偏好”语言切换时，只需要切换 locale，不需要改页面。
 - 列表卡片统一固定高度：数据增多时在卡片内滚动，分页/表头保持可见（触发历史、异常发现、样本、实验、审计记录等均已按此处理）。
+
+---
+
+## 13. Playground 矩阵实验与 Diff（0.2.0）
+
+调 prompt 时最常见的问题是「改完之后到底变好了没有」，靠肉眼比输出不可靠。矩阵把「数据集样本 × 列（prompt 版本 × 模型 × 参数）」一次跑成网格，再按列给出逐样本 Diff。
+
+### 13.1 页面上怎么用
+
+入口：构建 →「调试与提示词」→「矩阵实验」（`/matrix`）。
+
+1. 选数据集与样本数（默认 10，上限 20；可用 `emonlens.playground.matrix.max-samples` 调整）。
+2. 可选挂 1–5 个评估器（EXPRESSION / REGEX / LLM_JUDGE / TRAJECTORY）。挂上之后每个格子会同时给出 `PASS/FAIL/UNKNOWN/ERROR` 与平均分。
+3. 添加列：每列可以是「提示词库里的某个版本」或直接写的模板；指定模型与温度。
+4. 点「预估成本」→ 看格数、预计外部调用次数、预计 token 与成本（按「模型价格」计价；没配价目的模型会显式列出，不伪造总额）。
+5. 点「运行矩阵」：受理后后台按并发度执行，页面每 1.5 秒刷新进度。
+6. 跑完可「导出 CSV」；选 base 列与对比列点「对比」得到 Diff；需要成为准入证据时点「升格为正式实验」。
+
+### 13.2 API
+
+```bash
+# 1) 预估（只算不落库）
+curl -s -X POST "$HOST/api/v1/playground/matrices/estimate" \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' -d '{
+    "datasetId": "ds-1",
+    "sampleLimit": 5,
+    "evaluatorIds": ["ev-1"],
+    "columns": [
+      {"key":"c1","label":"v2-gpt4o","promptName":"support-assistant","promptVersion":2,"model":"gpt-4o","temperature":0.2},
+      {"key":"c2","label":"v3-gpt4o","promptName":"support-assistant","promptVersion":3,"model":"gpt-4o","temperature":0.2}
+    ]}'
+
+# 2) 受理（必须确认成本；同 Idempotency-Key 同请求返回同一矩阵）
+curl -s -X POST "$HOST/api/v1/playground/matrices" \
+  -H "Authorization: Bearer $JWT" -H "Idempotency-Key: matrix-2026-11-03-1" \
+  -H 'Content-Type: application/json' -d '{ ...同上..., "confirmEstimate": true }'
+
+# 3) 看进度与结果（cells 内含 output / latencyMs / tokens / cost / scores）
+curl -s "$HOST/api/v1/playground/matrices/{matrixId}" -H "Authorization: Bearer $JWT"
+
+# 4) 导出网格 CSV
+curl -s "$HOST/api/v1/playground/matrices/{matrixId}/export.csv" -H "Authorization: Bearer $JWT" -o grid.csv
+
+# 5) Diff（base 列 vs 目标列）
+curl -s -X POST "$HOST/api/v1/playground/matrices/{matrixId}/diff" \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -d '{"baseColumn":"c1","targetColumn":"c2"}'
+```
+
+### 13.3 结论怎么读
+
+- `deterministic`：`SAME`（输出 hash 或归一化文本一致）/ `CHANGED` / `MISSING`（有一列没输出）。
+- `preference`：把目标列当候选 B —— `IMPROVEMENT`（B 更好）/ `REGRESSION`（A 更好）/ `TIE` / `UNKNOWN`（方向冲突或调用失败，不硬判）。
+- `TRADEOFF`：语义偏好与评估结论冲突时出现，原因码是 `PREFERENCE_UP_SCORE_DOWN`（judge 说更好但评估从 PASS 变 FAIL）或反向。看到它说明「有得有失」，不要当成纯改进。
+- 每个 `diff.items[]` 都能追溯到样本，`calls_json` 保留 judge 的实际呈现顺序与模型，供事后复核。
+
+### 13.4 边界与限制
+
+- 矩阵**不是**准入证据：没有候选指纹、不进 Gate、不进信任分。要放行必须「升格为正式实验」（见 §14.2）。
+- 默认硬上限：20 样本 / 8 列 / 200 格 / 1000 次外部调用；超限直接 400 并说明原因。
+- 不支持 SDK 评估器（需要外部回写），会在受理时拒绝。
+- 单格失败写 `ERROR` 且矩阵落 `PARTIAL`，不会中断整批；实例重启时残留 `RUNNING` 会标 `FAILED`（不假装还在跑）。
+
+---
+
+## 14. Prompt 版本 × 实验与 CI 门禁（0.2.0）
+
+### 14.1 让 run 绑定 prompt 版本
+
+提交 run 时带上 `promptName`（可选 `promptVersion` / `promptLabel`）：
+
+```bash
+curl -s -X POST "$HOST/api/v1/open/eval-runs" \
+  -H "X-Api-Token: $TOKEN" -H "Idempotency-Key: run-2026-11-03-1" \
+  -H 'Content-Type: application/json' -d '{
+    "datasetId": "ds-1", "evaluatorIds": ["ev-1"], "mode": "REPLAY",
+    "promptName": "support-assistant", "promptLabel": "production",
+    "runLabel": "candidate", "commitSha": "'"$GITHUB_SHA"'"
+  }'
+```
+
+- 只给 `promptName` 时按 `promptLabel` 解析（缺省 `production`）；给 `promptVersion` 则以版本为准。
+- 解析出的 `(name, version, hash)` 进候选指纹：换版本 → 指纹变化 → 两条 run 自然不可比。
+- 每次解析都留痕（`et_prompt_resolution`：谁、什么时候、按哪个 label、取到哪个版本）。
+
+### 14.2 从矩阵升格为正式实验
+
+```bash
+curl -s -X POST "$HOST/api/v1/playground/matrices/{matrixId}/columns/c2/promote" \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -d '{"runLabel":"candidate","commitSha":"<你的 commit sha>"}'
+```
+
+升格沿用该列冻结的 prompt 版本与生成参数，创建一条 dataset run；幂等键由「矩阵 + 列」推导，重复点击返回同一条 run，不会重复计费。
+
+### 14.3 Gate 会因 prompt 改版而失效
+
+- 新增检查项 `PROMPT_BINDING`：绑定了 prompt 的 run 必须能给出 `version + hash`；若绑定的是 `production` 标签，**当前** production 指针必须仍指向同一版本。
+- verification 的失效原因新增 `PROMPT_PRODUCTION_MOVED:name:v旧->v新` 与 `PROMPT_PRODUCTION_MISSING:name`：prompt 改版（把 production 指向新版本）后，旧 Gate 立即 `usable=false`，CI 必须重新跑评测。
+- 未绑定 prompt 的历史 run 不受影响（不新增检查项，保持向后兼容）。
+
+### 14.4 从 prompt 版本反查评估证据
+
+`GET /api/v1/prompts/{name}/runs` 返回每条绑定过该 prompt 的 run：版本、run 标签、提交号、通过/失败计数、最新 Gate 决策与有效期。页面上在「提示词 → 版本抽屉」里以「评估证据」表展示。
+
+### 14.5 GitHub Action 与 PR 评论
+
+根目录 `action.yml` 是官方 composite Action，示例工作流见 `docs/examples/github-action-eval.yml`。
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write        # 评论需要写权限
+
+steps:
+  - uses: actions/checkout@v4
+  - name: EmonLens eval gate
+    id: emonlens
+    uses: your-org/emonlens@v0.2.0
+    with:
+      host: ${{ vars.EMONLENS_HOST }}
+      api-token: ${{ secrets.EMONLENS_API_TOKEN }}
+      dataset: ${{ vars.EMONLENS_DATASET_ID }}
+      evaluators: ${{ vars.EMONLENS_EVALUATOR_IDS }}
+      mode: REPLAY
+      prompt-name: support-assistant
+      prompt-label: production
+      baseline-label: baseline
+      comment: "true"
+```
+
+- Action 内部：`emonlens eval run --wait --assert --report-json` → 渲染评论（同一条 PR 只保留一条，按隐藏 marker 幂等更新）→ 用 CLI 退出码决定 job 结果（0 PASS / 2 FAIL / 3 BLOCKED / 4 错误 / 5 超时）。
+- 基线的来源：给某条 run 打 `baseline` 标签（`POST /api/v1/datasets/{id}/runs/{runId}/label`），同一数据集内该标签唯一；Action 会解析最近一条基线并把 `PASS→FAIL` / `FAIL→PASS` 写进评论。
+- 评论只包含计数、Gate 检查项与标识（prompt 版本 / commit），**不含样本正文**；Gate verification 不可用时评论会明确写「不得作为放行依据」。
+
+本地不装 GitHub 也能看渲染效果：
+
+```bash
+emonlens eval run --dataset ds-1 --suite suite-1 --wait --assert \
+  --prompt-name support-assistant --baseline-label baseline \
+  --report-json report.json
+emonlens ci comment --report report.json --dry-run
+```
+
+---
+
+## 15. 评估规则 v2：scope / filter / 回溯（R2-1）
+
+在线评估从「一套全局采样率」升级为**规则对象**。只要某个工作空间里创建并启用了规则，自动评估就按规则走；
+没有规则的空间行为完全不变（向后兼容），删掉/禁用全部规则即回退到全局采样。
+
+### 15.1 一条规则是什么
+
+| 字段 | 含义 |
+| --- | --- |
+| `ruleKey` | 规则标识（字母数字与 `_.:-`，最长 100；`summary`/`rewinds` 是保留字） |
+| `scope` | `TRACE`（trace 完成后评估）或 `SESSION`（会话空闲后聚合评估） |
+| `filters` | 全部满足才命中：`agentKeys` / `agentVersions` / `environments` / `promptNames` / `minDurationMs` / `maxDurationMs` / `onlyErrors` |
+| `evaluatorIds` | 1–5 个评估器 |
+| `sampleRate` | 0–1；**错误 trace 在 `errorForced` 下无视采样率** |
+| `maxPerHour` | 每小时评估次数上限；0=不限（按命中账本计数，重启不清零） |
+| `sessionIdleMinutes` | SESSION scope：空闲多少分钟后评估（默认 5） |
+| `priority` | 越小越先匹配；多规则命中同一批评估器时用它决定谁"真正执行" |
+
+```bash
+# 1) 建规则：只评 support-agent 的慢请求，采样 20%，错误全量，每小时最多 200 次
+curl -s -X POST "$HOST/api/v1/eval-rules" -H "Authorization: Bearer $JWT" \
+  -H 'Content-Type: application/json' -d '{
+    "ruleKey": "support-slow",
+    "name": "客服慢请求",
+    "scope": "TRACE",
+    "filters": {"agentKeys": ["support-agent"], "minDurationMs": 3000},
+    "evaluatorIds": ["ev-1"],
+    "sampleRate": 0.2,
+    "errorForced": true,
+    "maxPerHour": 200
+  }'
+
+# 2) 会话级规则：会话空闲 10 分钟后对多轮聚合视图评估一次
+curl -s -X POST "$HOST/api/v1/eval-rules" -H "Authorization: Bearer $JWT" \
+  -H 'Content-Type: application/json' -d '{
+    "ruleKey": "session-quality", "scope": "SESSION",
+    "evaluatorIds": ["ev-session"], "sessionIdleMinutes": 10
+  }'
+
+# 3) 汇总（按 scope 与规则分区，另带命中决策计数）
+curl -s "$HOST/api/v1/eval-rules/summary?windowHours=24" -H "Authorization: Bearer $JWT"
+```
+
+### 15.2 幂等与去重（为什么不会重复花钱）
+
+- 命中账本 `et_eval_rule_hit` 的唯一键是 `(rule_key, subject_id)`：同一条规则对同一条 trace / 同一个会话
+  **只评估一次**。重复的 trace 完成事件、Rewind 重跑、多个规则同时命中都不会产生第二次调用。
+- 多规则命中同一批评估器时，按 `priority` 顺序执行，同一评估器只跑一次；后命中的规则记 `DEDUPED`，
+  结论的 `rule_key` 是**实际执行**的那条规则。
+- 小时预算也读账本（`SAMPLED` + `FORCED` 计数），所以重启进程不会"刷新额度"。预算用尽记 `SKIPPED_BUDGET`。
+
+### 15.3 SESSION scope 的口径
+
+- 会话成员按 `session_id` 聚合，用每轮的 `inputPreview` / `outputPreview` 拼成多轮摘录作为候选输出；
+  **不读取正文内容**（不受 `TRACE_CONTENT` 权限影响，也不会把正文写进评估请求之外的存储）。
+- 结论写入 `et_eval_result`，带 `scope=SESSION`、`session_id`、`rule_key`，主体 id 为 `session:<sessionId>`
+  （避免与真实 trace 的 `(evaluator, trace, attempt)` 唯一键冲突）。
+- 会话仍活跃时不评估；空闲超过 `sessionIdleMinutes` 后由后台扫描补评，或由 `/summary` 前的正常流程触发。
+
+### 15.4 Rewind：按 filter 补评历史 trace
+
+```bash
+# 建作业（同 Idempotency-Key 返回同一作业）
+curl -s -X POST "$HOST/api/v1/eval-rules/support-slow/rewinds" \
+  -H "Authorization: Bearer $JWT" -H "Idempotency-Key: rewind-2026-11-11-1" \
+  -H 'Content-Type: application/json' -d '{
+    "filters": {"minStartTime": "2026-11-01T00:00:00", "agentKeys": ["support-agent"]},
+    "ratePerMinute": 120,
+    "limit": 500
+  }'
+
+# 观察 / 暂停 / 恢复 / 取消
+curl -s "$HOST/api/v1/eval-rules/rewinds/$JOB" -H "Authorization: Bearer $JWT"
+curl -s -X POST "$HOST/api/v1/eval-rules/rewinds/$JOB/pause"  -H "Authorization: Bearer $JWT"
+curl -s -X POST "$HOST/api/v1/eval-rules/rewinds/$JOB/resume" -H "Authorization: Bearer $JWT"
+curl -s -X POST "$HOST/api/v1/eval-rules/rewinds/$JOB/cancel" -H "Authorization: Bearer $JWT"
+```
+
+- 游标按 `(start_time, trace_id)` 递增，暂停后保留游标，恢复从断点继续。
+- 每轮处理量 = `ratePerMinute/12`（调度每 5 秒一轮，因此约等于每分钟 `ratePerMinute` 条）。
+- 已评估过的 trace 会记 `deduped` 而不是重复评估；`evaluated/deduped/failed` 三个计数可直接判断作业效果。
+
+### 15.5 与旧全局采样的关系
+
+| 场景 | 行为 |
+| --- | --- |
+| 工作空间没有启用规则 | 走旧全局采样（`default_rate` + `max_per_hour` + 错误强制），完全不变 |
+| 有启用规则 | 只按规则评估；全局采样率对该空间不再生效 |
+| 规则全部禁用/删除 | 自动回到全局采样 |
+
+### 15.6 已知边界（后续迭代）
+
+- `SPAN` scope 目前复用 TRACE 的正文口径（独立 span 采样需要 span→content 映射先落地）。
+- Evaluation Monitor 的阈值判定仍是「按 agentKey + evaluatorKey 的最近 N 条」，分母尚未随 scope 调整。
+
+
 

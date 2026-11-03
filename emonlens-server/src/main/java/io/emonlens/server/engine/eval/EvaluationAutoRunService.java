@@ -34,6 +34,7 @@ public class EvaluationAutoRunService {
     private final EmonLensProperties properties;
     private final SysSettingService sysSettingService;
     private final SamplingService samplingService;
+    private final EvaluationRuleService ruleService;
     private final EvaluatorService evaluatorService;
     private final EvaluationRunService evaluationRunService;
     private final TraceSummaryMapper traceSummaryMapper;
@@ -57,6 +58,29 @@ public class EvaluationAutoRunService {
         if (summary == null || !TraceSummaryEntity.STATUS_COMPLETED.equals(summary.getStatus())) {
             return;
         }
+        // R2-1：工作空间配置了启用规则时，走「规则 scope + filter + 采样/预算 + 幂等」路径；
+        // 没有规则则维持原来的全局采样率，升级不改变既有行为。
+        if (ruleService.anyEnabled(workspaceId)) {
+            int produced;
+            try {
+                produced = ruleService.runForTrace(workspaceId, summary, false);
+            } catch (Exception e) {
+                log.error("rule based auto eval failed, trace={}", traceId, e);
+                produced = 0;
+            }
+            if (summary.getSessionId() != null && !summary.getSessionId().isBlank()) {
+                try {
+                    // 会话仍活跃时这里不会评估，等空闲扫描补评（SESSION scope）
+                    ruleService.runForSession(workspaceId, summary.getSessionId());
+                } catch (Exception e) {
+                    log.error("session rule eval failed, session={}", summary.getSessionId(), e);
+                }
+            }
+            if (produced > 0) {
+                enqueueEvalEvents(workspaceId, traceId, summary.getAgentKey());
+            }
+            return;
+        }
         if (!samplingService.shouldAutoEvaluate(summary)) {
             return;
         }
@@ -74,19 +98,23 @@ public class EvaluationAutoRunService {
             }
         }
         if (anyResult) {
-            // traceId/agentKey 来自上报数据，必须序列化转义
-            Map<String, Object> fields = new LinkedHashMap<>();
-            fields.put("traceId", traceId);
-            fields.put("agentKey", summary.getAgentKey());
-            String payload;
-            try {
-                payload = objectMapper.writeValueAsString(fields);
-            } catch (Exception e) {
-                payload = "{}";
-            }
-            eventService.enqueue(EventType.EVAL_RESULT_READY, workspaceId, summary.getAgentKey(), payload);
-            eventService.enqueue(EventType.SCORE_CHANGED, workspaceId, summary.getAgentKey(), payload);
+            enqueueEvalEvents(workspaceId, traceId, summary.getAgentKey());
         }
+    }
+
+    /** EVAL_RESULT_READY + SCORE_CHANGED：只带 traceId/agentKey，不带正文。 */
+    private void enqueueEvalEvents(String workspaceId, String traceId, String agentKey) {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("traceId", traceId);
+        fields.put("agentKey", agentKey);
+        String payload;
+        try {
+            payload = objectMapper.writeValueAsString(fields);
+        } catch (Exception e) {
+            payload = "{}";
+        }
+        eventService.enqueue(EventType.EVAL_RESULT_READY, workspaceId, agentKey, payload);
+        eventService.enqueue(EventType.SCORE_CHANGED, workspaceId, agentKey, payload);
     }
 
     /** 同 evaluator+trace 的下一次尝试序号（受 maxAttempt 封顶） */
