@@ -39,6 +39,12 @@ artifacts/
 design
 emonlens-ui/.impeccable
 
+# 内部设计/验收文档与 AWR 台账：遵循 CONTRIBUTING「设计文档由维护者内部同步（不随本仓库发布）」，
+# 只发布操作类文档（部署/接入/日常操作/测试方法），这些文件仅保留在本地
+docs/EmonLens评测平台迭代方案.md
+docs/EmonLens迭代验收证据索引.md
+work-ledger.yaml
+
 # AWR 全部为本地运行时状态（state.db、锁文件、验收报告、content review 回执等）：
 # 一律不入库，避免把机器本地状态与每次校验产物提交到远端
 .awr/
