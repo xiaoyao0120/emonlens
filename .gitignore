@@ -39,11 +39,6 @@ artifacts/
 design
 emonlens-ui/.impeccable
 
-# AWR local runtime state
-.awr/state.db
-.awr/state.db-*
-.awr/artifacts/
-.awr/mutations/
-.awr/cache/
-.awr/clients/
-.awr/executions/
+# AWR 全部为本地运行时状态（state.db、锁文件、验收报告、content review 回执等）：
+# 一律不入库，避免把机器本地状态与每次校验产物提交到远端
+.awr/

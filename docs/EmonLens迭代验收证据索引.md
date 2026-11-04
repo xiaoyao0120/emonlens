@@ -79,6 +79,16 @@ mvn -B -o test     # 322 用例
 1. 散点圆渲染出 `r="NaN"`——run 计数列缺失时前端未做数值兜底，圆点直接不可见；
 2. 重复 `datasetKey` 建数据集返回 **HTTP 500 internal error**（用户双击「创建」即触发），现已改为 `40901` + 中文可读提示，并补了后端回归测试。
 
+## AWR 产物的存放约定
+
+`.awr/` 整个目录都是**本地运行时状态**，不入库（见仓库根 `.gitignore`）：
+`state.db`（会话/认领/检查点）、`reports/`（每次 `work prepare-completion` 的验收报告与 evidence 回执）、
+`content-reviews/`（intake 的 review 回执）、`project.toml`（AWR 项目清单）。
+
+因此远端仓库里不会出现验收报告文件；验证结论体现在：本索引、各条 commit message、以及 AWR 本地的
+`awr work show <work>` / `awr intake inspect --source-sha <sha>` 查询结果。换机器或新克隆后需要重新
+`awr intake`（或恢复本地 `project.toml`）才能继续用 AWR 台账。
+
 ## 仍未闭合的偏差（按影响排序）
 
 1. **R3-4 真机 vision part 未发送 —— 已修复**：根因是 `HttpLlmClient.chatWithImages` 覆写在一次文件重写中
