@@ -13,7 +13,9 @@ module.exports = defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 1,
-  reporter: [['list'], ['html', { open: 'never', outputFolder: 'report' }]],
+  // 产物统一落到仓库根 test/（已 gitignore）：报告与失败截图/轨迹不进远端仓库
+  outputDir: '../../test/e2e-ui/results',
+  reporter: [['list'], ['html', { open: 'never', outputFolder: '../../test/e2e-ui/report' }]],
   use: {
     baseURL: process.env.EMONLENS_BASE_URL || 'http://127.0.0.1:8300',
     locale: 'zh-CN',
