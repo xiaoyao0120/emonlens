@@ -2,7 +2,7 @@
     "branch_id":  null,
     "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
     "evidence_type":  "verification_report",
-    "external_key":  "r3-4-multimodal",
+    "external_key":  "r3-4-multimodal@be9ae6f68ef6",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r3-4-multimodal.json",
     "scope":  [
@@ -10,9 +10,9 @@
                   "emonlens-ui",
                   "docs"
               ],
-    "sha256":  "8511e6be90f9491444028b82d72cf5d4e097361989e72dedc7ef5fbee24849b0",
-    "source_sha":  "36c1cd29ae1f8a6ca339fe0ca9e6c29fa60178e0",
+    "sha256":  "8c9bc592dacc89a888b6ca31bbd2a3d747ce1a0d2a7748e7833a48a3883924eb",
+    "source_sha":  "be9ae6f68ef6fd76d53efd778fec3c0c358268f7",
     "summary":  "Completion report for r3-4-multimodal",
-    "verified_at":  1793750491008,
+    "verified_at":  1793754608123,
     "work_item_key":  "r3-4-multimodal"
 }

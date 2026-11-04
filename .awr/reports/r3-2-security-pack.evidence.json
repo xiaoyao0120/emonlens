@@ -2,7 +2,7 @@
     "branch_id":  null,
     "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
     "evidence_type":  "verification_report",
-    "external_key":  "r3-2-security-pack",
+    "external_key":  "r3-2-security-pack@be9ae6f68ef6",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r3-2-security-pack.json",
     "scope":  [
@@ -10,9 +10,9 @@
                   "emonlens-ui",
                   "docs"
               ],
-    "sha256":  "9352aad7ebffefa07ab51bf1e27ac2df6c05a3f9afca3725a43d65b46cbed70b",
-    "source_sha":  "36c1cd29ae1f8a6ca339fe0ca9e6c29fa60178e0",
+    "sha256":  "28c3f5b7f07329bd1d3d302344d8ebff86761a8fdf83e953cafaf73a6613c859",
+    "source_sha":  "be9ae6f68ef6fd76d53efd778fec3c0c358268f7",
     "summary":  "Completion report for r3-2-security-pack",
-    "verified_at":  1793750491008,
+    "verified_at":  1793754608123,
     "work_item_key":  "r3-2-security-pack"
 }

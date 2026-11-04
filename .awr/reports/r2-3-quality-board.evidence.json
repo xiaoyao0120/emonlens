@@ -2,7 +2,7 @@
     "branch_id":  null,
     "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
     "evidence_type":  "verification_report",
-    "external_key":  "r2-3-quality-board",
+    "external_key":  "r2-3-quality-board@be9ae6f68ef6",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r2-3-quality-board.json",
     "scope":  [
@@ -10,9 +10,9 @@
                   "emonlens-ui",
                   "docs"
               ],
-    "sha256":  "98a408b753b29878516563163eff19710f99c7bf9665ff0d5cca1354ea30e9c9",
-    "source_sha":  "36c1cd29ae1f8a6ca339fe0ca9e6c29fa60178e0",
+    "sha256":  "dd167abd50fd50b63910c81e38222681be5765bdceec59090d189798ab4ec18d",
+    "source_sha":  "be9ae6f68ef6fd76d53efd778fec3c0c358268f7",
     "summary":  "Completion report for r2-3-quality-board",
-    "verified_at":  1793750491008,
+    "verified_at":  1793754608123,
     "work_item_key":  "r2-3-quality-board"
 }
