@@ -14,6 +14,7 @@
 | 矩阵实验 / 告警 | 直接打开两个页面 | 页面骨架与关键文案渲染 |
 | 数据集详情 | 打开刚建的数据集 | 页面显示数据集 Key |
 | 系统设置（模型链路） | 打开「LLM 端点」页签 → 填 Base URL / API Key / 模型 → 保存 | 出现「已保存…」提示 |
+| 矩阵实验（模型链路） | `?datasetId=` 深链 → 填满每一列的 prompt 与模型 → 运行矩阵（首次是预估，二次才提交） | 状态到 `COMPLETED/PARTIAL`，单元格 `.cell-out` 出现 `fake-llm-ok` |
 | 试跑（模型链路） | 填 System Prompt 与 Prompt → ▶ 运行 | 输出卡片出现假端点的固定回复 `fake-llm-ok` |
 
 每个页面级用例都额外断言**无 console error**（过滤 favicon / ResizeObserver / 静态资源 404 之类噪声）。

@@ -151,11 +151,13 @@
 
 <script setup>
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { NTag, useMessage } from 'naive-ui'
 import api from '@/api'
 import Modal from '@/components/Modal.vue'
 
 const message = useMessage()
+const route = useRoute()
 
 const datasets = ref([])
 const promptNames = ref([])
@@ -472,6 +474,11 @@ async function loadHistory() {
 onMounted(async () => {
   try {
     datasets.value = (await api.datasets()) || []
+    // 支持 ?datasetId= 深链（与实验排行一致）：矩阵配置可直接分享/复现，E2E 也有确定性入口
+    const wanted = route.query.datasetId ? String(route.query.datasetId) : ''
+    if (wanted && datasets.value.some((d) => d.id === wanted)) {
+      form.datasetId = wanted
+    }
   } catch (e) { datasets.value = [] }
   try {
     const page = await api.prompts({ pageNumber: 1, pageSize: 100 })

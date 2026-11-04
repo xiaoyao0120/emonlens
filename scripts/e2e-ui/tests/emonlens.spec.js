@@ -18,6 +18,8 @@ const TRACE_ID = `ui-e2e-trace-${RUN_STAMP}`;
 const DATASET_KEY = `ui-e2e-ds-${RUN_STAMP}`;
 // 实验排行用例另建一个数据集：与"页面新建数据集"用例的 key 必须不同，否则重复建集会被拒
 const BOARD_DATASET_KEY = `ui-e2e-board-${RUN_STAMP}`;
+// 跨 describe 共享：第一个 describe 里建好的数据集，模型链路 describe 的矩阵用例要复用
+let sharedDatasetId = null;
 
 const IGNORED_CONSOLE = [/favicon/i, /ResizeObserver/i, /Failed to load resource/i];
 
@@ -211,6 +213,7 @@ test.describe.serial('EmonLens 页面操作', () => {
   test('实验排行：选中数据集后散点与排行表渲染', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     datasetId = await seedDatasetWithRun(ctx, token);
+    sharedDatasetId = datasetId;
     await login(page);
     // 用 ?datasetId= 深链进入：报表可分享，也让 E2E 不依赖下拉交互
     await page.goto(`/experiment-leaderboard?datasetId=${datasetId}`);
@@ -286,6 +289,43 @@ test.describe.serial('EmonLens 页面操作（模型链路）', () => {
 
     await page.getByRole('button', { name: '保存' }).first().click();
     await expect(page.locator('.n-message').first()).toContainText(/已保存/, { timeout: 30_000 });
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('矩阵实验提交并跑到出结果（真实调用假端点）', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    // 用模型链路里建好的数据集（含 1 条 trace 样本）
+    expect(sharedDatasetId, '依赖前面用例创建的数据集').toBeTruthy();
+    await login(page);
+    await page.goto(`/matrix?datasetId=${sharedDatasetId}`);
+    await expect(page.locator('.base-page').first()).toBeVisible();
+
+    // 矩阵页默认就有多列（空 prompt）——必须把**每一列**都填上，否则后端会以
+    // 「第 N 列缺少 prompt」拒绝提交。没有列时才需要新增。
+    if ((await page.getByPlaceholder(/列名/).count()) === 0) {
+      await page.getByRole('button', { name: /新增列/ }).click();
+    }
+    const promptBoxes = page.locator('textarea');
+    const promptCount = await promptBoxes.count();
+    for (let i = 0; i < promptCount; i += 1) {
+      await promptBoxes.nth(i).fill('请复述：{{input}}');
+    }
+    const modelInputs = page.getByPlaceholder(/^模型$/);
+    const modelCount = await modelInputs.count();
+    for (let i = 0; i < modelCount; i += 1) {
+      await modelInputs.nth(i).fill('fake-model');
+    }
+    await page.getByPlaceholder(/列名/).first().fill('e2e-col');
+
+    // 第一次点运行只做预估（页面会提示先预估），第二次才真正提交
+    await page.getByRole('button', { name: '运行矩阵' }).click();
+    await expect(page.locator('.n-message').first()).toContainText(/预估|先看一次/, { timeout: 60_000 });
+    await page.getByRole('button', { name: '运行矩阵' }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已受理|正在执行/, { timeout: 60_000 });
+
+    // 轮询到终态，并断言单元格里出现假端点的回复
+    await expect(page.locator('body')).toContainText(/COMPLETED|PARTIAL/, { timeout: 120_000 });
+    await expect(page.locator('.cell-out').first()).toContainText('fake-llm-ok', { timeout: 120_000 });
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
