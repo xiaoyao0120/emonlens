@@ -13,6 +13,8 @@
 | 实验排行 | 选数据集 → 看散点与排行 | SVG 散点至少 1 个点、排行表有百分比行 |
 | 矩阵实验 / 告警 | 直接打开两个页面 | 页面骨架与关键文案渲染 |
 | 数据集详情 | 打开刚建的数据集 | 页面显示数据集 Key |
+| 系统设置（模型链路） | 打开「LLM 端点」页签 → 填 Base URL / API Key / 模型 → 保存 | 出现「已保存…」提示 |
+| 试跑（模型链路） | 填 System Prompt 与 Prompt → ▶ 运行 | 输出卡片出现假端点的固定回复 `fake-llm-ok` |
 
 每个页面级用例都额外断言**无 console error**（过滤 favicon / ResizeObserver / 静态资源 404 之类噪声）。
 
@@ -57,6 +59,20 @@ docker run --rm --network emonlens-e2e \
 ```
 
 镜像 tag 必须与 `package.json` 里 `@playwright/test` 版本一致，否则浏览器路径不匹配。
+
+## 模型链路怎么跑（不需要真实模型）
+
+`fixtures/fake_llm.py` 是一个 OpenAI 兼容的最小假端点，回复固定带 `fake-llm-ok` 前缀：
+
+```bash
+docker network create emonlens-uie2e 2>/dev/null || true
+docker run -d --name fake-llm --network emonlens-uie2e \
+  -v "$PWD/fixtures/fake_llm.py:/fake.py:ro" python:3.11-alpine python /fake.py
+```
+
+用例顺序上，**先**在系统设置页把 Base URL 指向 `http://fake-llm:8080/v1` 并保存，
+**再**到试跑页运行 —— 这样验证的是"UI 表单保存 → 设置持久化 → LLM 客户端 → 响应渲染"整条链路，
+而不是靠环境变量把端点注进去。跑的时候传 `FAKE_LLM_URL`（默认 `http://fake-llm:8080/v1`）。
 
 ## 设计取舍
 

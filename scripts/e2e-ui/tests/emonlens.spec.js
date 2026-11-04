@@ -260,3 +260,45 @@ test.describe.serial('EmonLens 页面操作', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 需要"真实调用模型"的链路：用 fixtures/fake_llm.py 起一个 OpenAI 兼容假端点，
+// 先在系统设置页里配置它，再在试跑页真正跑一次。这样 UI → 设置持久化 → LLM 客户端
+// → 响应渲染 整条链路都被验证，且不依赖外部模型与密钥。
+// ---------------------------------------------------------------------------
+
+test.describe.serial('EmonLens 页面操作（模型链路）', () => {
+  const FAKE_LLM_URL = process.env.FAKE_LLM_URL || 'http://fake-llm:8080/v1';
+
+  test('系统设置里配置 LLM 端点并保存生效', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/sys/settings');
+    // naive-ui 的 tab 不是 role=tab；先等它可见再用短超时点击（用 .catch 兜 90s 默认超时会拖死整条用例）
+    const llmTab = page.locator('.n-tabs-tab').filter({ hasText: 'LLM 端点' }).first();
+    await expect(llmTab).toBeVisible({ timeout: 30_000 });
+    await llmTab.click({ timeout: 10_000 });
+    await expect(page.getByPlaceholder(/^https?:\/\//).first()).toBeVisible({ timeout: 30_000 });
+
+    await page.getByPlaceholder(/^https?:\/\//).first().fill(FAKE_LLM_URL);
+    await page.getByPlaceholder(/sk-\.\.\.|已保存/).first().fill('sk-e2e-fake');
+    await page.getByPlaceholder(/gpt-4o-mini/).first().fill('fake-model');
+
+    await page.getByRole('button', { name: '保存' }).first().click();
+    await expect(page.locator('.n-message').first()).toContainText(/已保存/, { timeout: 30_000 });
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('试跑页真正调用端点并渲染输出', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/playground');
+    await page.getByPlaceholder(/设定角色/).fill('你是一名客服助手。');
+    await page.getByPlaceholder(/客户资料/).fill('客户问：我的订单到哪了？');
+    await page.getByRole('button', { name: /运行/ }).first().click();
+
+    // 假端点固定回复里带 fake-llm-ok，出现在输出卡片即证明整条链路通了
+    await expect(page.locator('body')).toContainText('fake-llm-ok', { timeout: 60_000 });
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+});
