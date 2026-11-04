@@ -50,12 +50,15 @@
 </template>
 
 <script setup>
-import { computed, h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { NTag, useMessage } from 'naive-ui'
 import api from '@/api'
 import EmptyState from '@/components/EmptyState.vue'
 
 const message = useMessage()
+const route = useRoute()
+const router = useRouter()
 const datasets = ref([])
 const datasetId = ref(null)
 const windowDays = ref(30)
@@ -80,7 +83,12 @@ const maxCost = computed(() => {
   const max = Math.max(0.0001, ...values)
   return max
 })
-const maxItems = computed(() => Math.max(1, ...points.value.map((p) => p.passCount + p.failCount + p.unknownCount)))
+// run 的计数列可能缺失（历史 run / 未 enrich），一律按 0 兜底——否则半径会算成 NaN，
+// 圆点渲染不出来（这个 bug 就是页面 E2E 抓到的）
+function itemCount(p) {
+  return (Number(p.passCount) || 0) + (Number(p.failCount) || 0) + (Number(p.unknownCount) || 0)
+}
+const maxItems = computed(() => Math.max(1, ...points.value.map(itemCount)))
 
 function cx(p) {
   const cost = p.cost == null ? 0 : Number(p.cost)
@@ -91,8 +99,7 @@ function cy(p) {
   return chartHeight - pad - (chartHeight - pad * 2) * (rate / 100)
 }
 function radius(p) {
-  const items = p.passCount + p.failCount + p.unknownCount
-  return 4 + 8 * Math.sqrt(items / maxItems.value)
+  return 4 + 8 * Math.sqrt(itemCount(p) / maxItems.value)
 }
 function tip(p) {
   const parts = [
@@ -145,14 +152,29 @@ async function load() {
   } catch (e) { message.error(e.message) }
 }
 
+// 支持 ?datasetId= 深链：报表可以直接分享/收藏，E2E 也用它做确定性入口
+const queryDatasetId = computed(() => (route.query.datasetId ? String(route.query.datasetId) : ''))
+
 onMounted(async () => {
   try {
     datasets.value = (await api.datasets()) || []
-    if (datasets.value.length) {
+    const wanted = queryDatasetId.value
+    const hit = wanted ? datasets.value.find((d) => d.id === wanted) : null
+    if (hit) {
+      datasetId.value = hit.id
+    } else if (datasets.value.length) {
       datasetId.value = datasets.value[0].id
+    }
+    if (datasetId.value) {
       await load()
     }
   } catch (e) { message.error(e.message) }
+})
+
+// 顶部切换数据集时同步到 URL，刷新后仍停在同一份报表
+watch(datasetId, (value) => {
+  if (!value || queryDatasetId.value === value) return
+  router.replace({ query: { ...route.query, datasetId: value } })
 })
 </script>
 

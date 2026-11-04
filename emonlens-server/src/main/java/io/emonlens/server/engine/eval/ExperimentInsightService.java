@@ -71,9 +71,11 @@ public class ExperimentInsightService {
             point.put("passed", filterMatch(run, model, candidateLabel, minCoverage) ? "KEEP" : "FILTERED");
             point.put("passRate", passRateOf(run));
             point.put("coverage", coverageOf(run));
-            point.put("passCount", run.getPassCount());
-            point.put("failCount", run.getFailCount());
-            point.put("unknownCount", run.getUnknownCount());
+            // 计数列可能为空（历史 run / 未 enrich）：输出 0 而不是 null，
+            // 否则前端图表拿到 undefined 会把半径算成 NaN
+            point.put("passCount", run.getPassCount() == null ? 0 : run.getPassCount());
+            point.put("failCount", run.getFailCount() == null ? 0 : run.getFailCount());
+            point.put("unknownCount", run.getUnknownCount() == null ? 0 : run.getUnknownCount());
             point.put("cost", cost.get("cost"));
             point.put("priced", cost.get("priced"));
             point.put("avgLatencyMs", averageLatency(items));

@@ -4131,6 +4131,17 @@ class DatasetPilotFlowTest extends AbstractIntegrationTest {
                 .isEqualTo(io.emonlens.common.ErrorCode.NOT_FOUND.getCode());
     }
 
+    @Test
+    void duplicateDatasetKeyIsConflictNotInternalError() throws Exception {
+        String key = "dup-key-" + System.nanoTime();
+        createDataset(key);
+        // 重复 key 必须是可读冲突（40901），不能是 50000 internal error——用户双击「创建」就会触发
+        JsonNode second = readTree(postApi("/api/v1/datasets", Map.of("datasetKey", key)));
+        assertThat(second.path("code").asInt())
+                .as("duplicate datasetKey: %s", second).isEqualTo(40901);
+        assertThat(second.path("message").asText()).contains("已存在");
+    }
+
     private String createDataset(String key) throws Exception {
         JsonNode response = readTree(postApi("/api/v1/datasets", Map.of("datasetKey", key)));
         assertThat(response.path("code").asInt()).isZero();

@@ -1,0 +1,262 @@
+const { test, expect, request } = require('@playwright/test');
+
+/**
+ * EmonLens 页面操作 E2E（浏览器级）。
+ *
+ * 覆盖真实用户路径：登录 → 新建数据集 → Trace 列表进详情 → 评估器质量扫描（会写 Finding）
+ * → 实验排行（选数据集、看散点与排行）→ 矩阵实验 / 告警页可打开 → 关键页面无 console 错误。
+ *
+ * 数据准备走 API（ingest / dataset / evaluator / run），断言全部落在页面 DOM 上——
+ * 这是我们此前缺失的一层：后端 HTTP 全绿并不代表页面能用。
+ */
+
+const ADMIN = { username: 'admin', password: '123456' };
+const INGEST_KEY = 'dev-trust-key-001';
+const RUN_STAMP = Date.now();
+const AGENT = `ui-e2e-agent-${RUN_STAMP}`;
+const TRACE_ID = `ui-e2e-trace-${RUN_STAMP}`;
+const DATASET_KEY = `ui-e2e-ds-${RUN_STAMP}`;
+// 实验排行用例另建一个数据集：与"页面新建数据集"用例的 key 必须不同，否则重复建集会被拒
+const BOARD_DATASET_KEY = `ui-e2e-board-${RUN_STAMP}`;
+
+const IGNORED_CONSOLE = [/favicon/i, /ResizeObserver/i, /Failed to load resource/i];
+
+function localDateTime(offsetSeconds = 0) {
+  const d = new Date(Date.now() + offsetSeconds * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function collectConsoleErrors(page) {
+  const errors = [];
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return;
+    const text = msg.text();
+    if (IGNORED_CONSOLE.some((re) => re.test(text))) return;
+    errors.push(text);
+  });
+  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
+  return errors;
+}
+
+async function login(page) {
+  await page.goto('/login');
+  await page.getByPlaceholder('用户名').fill(ADMIN.username);
+  await page.getByPlaceholder('密码').fill(ADMIN.password);
+  await page.getByRole('button', { name: /登\s*录/ }).click();
+  await page.waitForURL(/\/dashboard/, { timeout: 30_000 });
+  await expect(page.locator('.base-page, .dashboard-page, main').first()).toBeVisible();
+}
+
+async function apiLogin(ctx) {
+  const res = await ctx.post('/api/v1/auth/login', {
+    data: { username: ADMIN.username, password: ADMIN.password },
+  });
+  expect(res.ok(), `login http ${res.status()}`).toBeTruthy();
+  const body = await res.json();
+  expect(body.code, `login body ${JSON.stringify(body)}`).toBe(0);
+  return body.data.token;
+}
+
+async function ingestTrace(ctx, traceId) {
+  const res = await ctx.post('/api/v1/ingest/events', {
+    headers: { 'X-Trust-Key': INGEST_KEY },
+    data: [
+      {
+        traceId,
+        spanId: 'root',
+        agentKey: AGENT,
+        agentVersion: 'v1',
+        spanType: 'agent',
+        spanName: 'invoke_agent',
+        startTime: localDateTime(-5),
+        endTime: localDateTime(-4),
+        input: '页面 E2E：帮我查一下订单状态',
+        output: '您的订单已发货，预计明天送达。',
+      },
+    ],
+  });
+  expect(res.status(), `ingest http ${res.status()}`).toBe(200);
+}
+
+async function waitTrace(ctx, token, traceId) {
+  for (let i = 0; i < 40; i += 1) {
+    const res = await ctx.get(`/api/v1/traces/${traceId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await res.json();
+    const status = body?.data?.summary?.status;
+    if (status === 'COMPLETED') return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(`trace ${traceId} not completed in time`);
+}
+
+async function seedDatasetWithRun(ctx, token) {
+  const auth = { Authorization: `Bearer ${token}` };
+  const ds = await (
+    await ctx.post('/api/v1/datasets', { headers: auth, data: { datasetKey: BOARD_DATASET_KEY } })
+  ).json();
+  expect(ds.code, JSON.stringify(ds)).toBe(0);
+  const datasetId = ds.data.id;
+
+  const item = await (
+    await ctx.post(`/api/v1/datasets/${datasetId}/items`, {
+      headers: auth,
+      data: { traceId: TRACE_ID },
+    })
+  ).json();
+  expect(item.code, JSON.stringify(item)).toBe(0);
+
+  const ev = await (
+    await ctx.post('/api/v1/evaluators', {
+      headers: auth,
+      data: {
+        evaluatorKey: `ui-e2e-expr-${RUN_STAMP}`,
+        type: 'EXPRESSION',
+        spec: { type: 'EXPRESSION', passWhen: 'span_count >= 0' },
+      },
+    })
+  ).json();
+  expect(ev.code, JSON.stringify(ev)).toBe(0);
+
+  const run = await (
+    await ctx.post(`/api/v1/datasets/${datasetId}/runs/async`, {
+      headers: { ...auth, 'Idempotency-Key': `ui-e2e-run-${RUN_STAMP}` },
+      data: { evaluatorIds: [ev.data.id], mode: 'TRACE' },
+    })
+  ).json();
+  expect(run.code, JSON.stringify(run)).toBe(0);
+  const runId = run.data.runId;
+
+  for (let i = 0; i < 60; i += 1) {
+    const detail = await (
+      await ctx.get(`/api/v1/datasets/${datasetId}/runs/${runId}`, { headers: auth })
+    ).json();
+    const status = detail?.data?.run?.status;
+    if (status === 'COMPLETED' || status === 'FAILED') break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return datasetId;
+}
+
+test.describe.serial('EmonLens 页面操作', () => {
+  /** @type {import('@playwright/test').APIRequestContext} */
+  let ctx;
+  let token;
+  let datasetId;
+
+  test.beforeAll(async ({ baseURL }) => {
+    ctx = await request.newContext({ baseURL });
+    token = await apiLogin(ctx);
+    await ingestTrace(ctx, TRACE_ID);
+    await waitTrace(ctx, token, TRACE_ID);
+  });
+
+  test.afterAll(async () => {
+    await ctx?.dispose();
+  });
+
+  test('登录后进入总览，侧边栏与内容区可见', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await expect(page).toHaveURL(/\/dashboard/);
+    await expect(page.locator('body')).toContainText('总览');
+    await expect(page.locator('text=/调用链路|评估结果|数据集/').first()).toBeVisible();
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('通过页面表单新建数据集并出现在列表', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/datasets');
+    await page.getByRole('button', { name: /新建数据集/ }).click();
+    await page.getByPlaceholder('如 support-qa-regression').fill(DATASET_KEY);
+    await page.getByRole('button', { name: '创建' }).click();
+    // naive-ui message 提示成功，或列表直接出现新行
+    await expect(
+      page.locator('.n-message, .n-data-table-tr').filter({ hasText: DATASET_KEY }).first(),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.n-data-table-tr').filter({ hasText: DATASET_KEY })).toHaveCount(1);
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('Trace 列表点进详情，span 与输出渲染', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/traces');
+    // 列表把 Trace ID 截断成前 16 字符 + 省略号（见 TraceListView 的 traceId 渲染），
+    // 所以按前缀匹配；完整 ID 由跳转后的 URL 断言来确认。
+    const rowPrefix = TRACE_ID.slice(0, 16);
+    const row = page.locator('.n-data-table-tr').filter({ hasText: rowPrefix }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    // 跳转挂在 Trace ID 单元格的 .trace-link 上（不是整行）
+    await row.locator('.trace-link').click();
+    await expect(page).toHaveURL(new RegExp(`/traces/${TRACE_ID}`));
+    await expect(page.locator('body')).toContainText('invoke_agent');
+    await expect(page.locator('body')).toContainText('订单');
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('评估器质量页点「扫描并写入告警」走通并给出反馈', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/evaluator-quality');
+    await expect(page.locator('body')).toContainText('评估器质量');
+    await page.getByRole('button', { name: /扫描并写入告警/ }).click();
+    await expect(page.locator('.n-message').first()).toContainText(/已写入/, { timeout: 30_000 });
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('实验排行：选中数据集后散点与排行表渲染', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    datasetId = await seedDatasetWithRun(ctx, token);
+    await login(page);
+    // 用 ?datasetId= 深链进入：报表可分享，也让 E2E 不依赖下拉交互
+    await page.goto(`/experiment-leaderboard?datasetId=${datasetId}`);
+    await expect(page.locator('body')).toContainText('Leaderboard');
+    await expect(page.locator('body')).toContainText(BOARD_DATASET_KEY);
+
+    await expect(page.locator('svg.chart circle').first()).toBeVisible({ timeout: 30_000 });
+    const circles = await page.locator('svg.chart circle').count();
+    expect(circles, '散点至少应有一个 run 点').toBeGreaterThan(0);
+    // 回归守卫：半径/坐标算成 NaN 会让圆点消失（曾经真的发生过）
+    const geometry = await page.locator('svg.chart circle').evaluateAll((nodes) =>
+      nodes.map((n) => ({
+        r: n.getAttribute('r'),
+        cx: n.getAttribute('cx'),
+        cy: n.getAttribute('cy'),
+      })),
+    );
+    for (const g of geometry) {
+      expect(Number.isNaN(Number(g.r)), `circle r=${g.r} 不能是 NaN`).toBe(false);
+      expect(Number.isNaN(Number(g.cx)), `circle cx=${g.cx} 不能是 NaN`).toBe(false);
+      expect(Number.isNaN(Number(g.cy)), `circle cy=${g.cy} 不能是 NaN`).toBe(false);
+    }
+    await expect(page.locator('.n-data-table-tr').filter({ hasText: '%' }).first()).toBeVisible();
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('矩阵实验与告警页可正常打开', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/matrix');
+    await expect(page.locator('.base-page').first()).toBeVisible();
+    await expect(page.locator('body')).toContainText(/矩阵|抽样/);
+
+    await page.goto('/alerts');
+    await expect(page.locator('.base-page').first()).toBeVisible();
+    await expect(page.locator('body')).toContainText(/告警|事件/);
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('数据集详情页可打开并显示样本', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    expect(datasetId, '依赖上一个用例创建的数据集').toBeTruthy();
+    await login(page);
+    await page.goto(`/datasets/${datasetId}`);
+    await expect(page.locator('.base-page').first()).toBeVisible();
+    await expect(page.locator('body')).toContainText(BOARD_DATASET_KEY);
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+});

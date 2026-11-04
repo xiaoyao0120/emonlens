@@ -1,0 +1,13 @@
+{
+  "name": "emonlens-ui-e2e",
+  "private": true,
+  "description": "Browser-level page-operation E2E for the EmonLens UI (Playwright).",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.47.2"
+  }
+}

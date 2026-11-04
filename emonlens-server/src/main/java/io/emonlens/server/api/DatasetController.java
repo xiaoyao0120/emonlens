@@ -273,9 +273,18 @@ public class DatasetController {
         if (request.getDatasetKey() == null || request.getDatasetKey().isBlank()) {
             throw new EmonLensException(ErrorCode.BAD_REQUEST, "datasetKey is required");
         }
+        String datasetKey = request.getDatasetKey().trim();
+        // 先查重：重复 key 是用户能理解的冲突（双击「创建」就会遇到），不能落到 500 internal error
+        Long duplicated = datasetMapper.selectCount(Wrappers.<DatasetEntity>lambdaQuery()
+                .eq(DatasetEntity::getWorkspaceId, CurrentContext.require().getWorkspaceId())
+                .eq(DatasetEntity::getDatasetKey, datasetKey));
+        if (duplicated != null && duplicated > 0) {
+            throw new EmonLensException(ErrorCode.CONFLICT,
+                    "数据集 key 已存在：" + datasetKey + "，请换一个，或直接打开已有数据集");
+        }
         DatasetEntity entity = new DatasetEntity();
         entity.setWorkspaceId(CurrentContext.require().getWorkspaceId());
-        entity.setDatasetKey(request.getDatasetKey().trim());
+        entity.setDatasetKey(datasetKey);
         entity.setDescription(request.getDescription());
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
