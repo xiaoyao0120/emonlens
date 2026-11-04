@@ -1432,6 +1432,12 @@ curl -s -X POST "$HOST/api/v1/datasets/$DS/security-seeds" \
   -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
   -d '{"categories":["PROMPT_INJECTION","JAILBREAK"]}'
 # → {"created":6,"skipped":0,...}；重复导入 created=0、skipped=6
+
+# 可选：strategy 组合（promptfoo redteam 式包装变体），同一种子 ×N 种策略
+curl -s -X POST "$HOST/api/v1/datasets/$DS/security-seeds" \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -d '{"categories":["PROMPT_INJECTION"],"strategies":["DIRECT","CONTEXT_OVERRIDE","ROLEPLAY_FRAME"]}'
+# 3 条种子 ×3 策略 = created 9；策略名进 contentHash，与默认导入互不冲突
 ```
 
 - 生成的样本：`purposeTags=security:<CATEGORY>`、`riskLevel=HIGH`、`sourceType=SECURITY_SEED`、

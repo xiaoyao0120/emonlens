@@ -55,16 +55,21 @@ public class SecurityEvidenceService {
     // ==================== 种子导入 ====================
 
     /**
-     * 把选中类别的种子写成数据集样本。以 input 的 sha256 去重：重复导入不会产生重复样本
+    /**
+     * 把选中类别的种子写成数据集样本。以 contentHash 去重：重复导入不会产生重复样本
      * （返回 created/skipped 计数，便于幂等重跑）。
+     *
+     * <p>R3-2 收尾：支持 strategy 组合（promptfoo redteam 式）。DIRECT 保持既有 hash 口径
+     * （sha256(input)）以保证旧数据幂等兼容；非 DIRECT 策略把策略名拼进 hash，避免与原种子互撞。</p>
      */
     public Map<String, Object> importSeeds(String workspaceId, String datasetId,
-                                           List<String> categories, String createdBy) {
+                                           List<String> categories, List<String> strategies,
+                                           String createdBy) {
         DatasetEntity dataset = datasetMapper.selectById(datasetId);
         if (dataset == null || !Objects.equals(workspaceId, dataset.getWorkspaceId())) {
             throw new EmonLensException(ErrorCode.NOT_FOUND, "dataset not found: " + datasetId);
         }
-        List<Map<String, Object>> seeds = registry.seeds(categories);
+        List<Map<String, Object>> seeds = registry.seedVariants(categories, strategies);
         if (seeds.isEmpty()) {
             throw new EmonLensException(ErrorCode.BAD_REQUEST,
                     "没有可导入的种子：categories 只能是安全包里的类别 key");
@@ -75,7 +80,9 @@ public class SecurityEvidenceService {
         for (Map<String, Object> seed : seeds) {
             String input = String.valueOf(seed.get("input"));
             String category = String.valueOf(seed.get("category"));
-            String contentHash = Sha256Utils.hash(input);
+            String strategy = String.valueOf(seed.get("strategy"));
+            String contentHash = SecurityPackRegistry.STRATEGY_DIRECT.equals(strategy)
+                    ? Sha256Utils.hash(input) : Sha256Utils.hash(strategy + "|" + input);
             Long exists = datasetItemMapper.selectCount(Wrappers.<DatasetItemEntity>lambdaQuery()
                     .eq(DatasetItemEntity::getDatasetId, datasetId)
                     .eq(DatasetItemEntity::getContentHash, contentHash));
@@ -83,13 +90,16 @@ public class SecurityEvidenceService {
                 skipped++;
                 continue;
             }
+            String sourceRef = SecurityPackRegistry.STRATEGY_DIRECT.equals(strategy)
+                    ? category + "/seed-" + seed.get("seedIndex")
+                    : category + "/seed-" + seed.get("seedIndex") + "@" + strategy;
             DatasetItemEntity item = new DatasetItemEntity();
             item.setDatasetId(datasetId);
             item.setInput(input);
             item.setExpectedOutput(String.valueOf(seed.get("expectedOutput")));
             item.setSchemaVersion(1);
             item.setSourceType(SOURCE_TYPE);
-            item.setSourceRef(category + "/seed-" + seed.get("seedIndex"));
+            item.setSourceRef(sourceRef);
             item.setPurposeTags(TAG_PREFIX + category);
             item.setRiskLevel("HIGH");
             item.setContentHash(contentHash);
@@ -105,6 +115,8 @@ public class SecurityEvidenceService {
                 ? registry.categories().stream().map(SecurityPackRegistry.Category::getKey)
                         .collect(java.util.stream.Collectors.toList())
                 : categories);
+        payload.put("strategies", strategies == null || strategies.isEmpty()
+                ? List.of(SecurityPackRegistry.STRATEGY_DIRECT) : strategies);
         payload.put("created", created);
         payload.put("skipped", skipped);
         payload.put("createdItemIds", createdIds);

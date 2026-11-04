@@ -49,23 +49,34 @@ public class SecurityPackController {
         return ApiResult.ok(registry.seeds(categories));
     }
 
-    /** 把选中类别的种子写成数据集样本（按 input 去重，重复导入幂等）。 */
+    /** 把选中类别的种子写成数据集样本（按 input 去重，重复导入幂等；可选 strategies 生成包装变体）。 */
     @PostMapping("/api/v1/datasets/{datasetId}/security-seeds")
     @RequiresPermission(Permissions.DATASET_MANAGE)
     @Audit(action = "security.seeds.import", resourceType = "dataset")
     public ApiResult<Map<String, Object>> importSeeds(@PathVariable String datasetId,
                                                       @RequestBody Map<String, Object> body) {
         List<String> categories = new java.util.ArrayList<>();
-        Object raw = body == null ? null : body.get("categories");
-        if (raw instanceof List) {
-            for (Object item : (List<?>) raw) {
-                if (item != null) {
-                    categories.add(String.valueOf(item));
+        List<String> strategies = new java.util.ArrayList<>();
+        if (body != null) {
+            Object rawCategories = body.get("categories");
+            if (rawCategories instanceof List) {
+                for (Object item : (List<?>) rawCategories) {
+                    if (item != null) {
+                        categories.add(String.valueOf(item));
+                    }
+                }
+            }
+            Object rawStrategies = body.get("strategies");
+            if (rawStrategies instanceof List) {
+                for (Object item : (List<?>) rawStrategies) {
+                    if (item != null) {
+                        strategies.add(String.valueOf(item));
+                    }
                 }
             }
         }
         return ApiResult.ok(evidenceService.importSeeds(CurrentContext.require().getWorkspaceId(),
-                datasetId, categories, CurrentContext.require().getUsername()));
+                datasetId, categories, strategies, CurrentContext.require().getUsername()));
     }
 
     /** run 的 security 证据：按类别与 OWASP 类目汇总，含红线结论与功能口径。 */

@@ -324,8 +324,10 @@ EmonLens 与竞品的能力分布是互补的：
   - 收尾更新：security run 证据已接入五维信任分的 security 维度——agent 最近一次含安全样本的
     COMPLETED run，`VIOLATION` 直接把 security 分打到 0（红线不是"扣几分"）、证据状态 COMPLETE、
     basis 标注 `security_run:VIOLATION`；`SECURE/INSUFFICIENT` 只补充来源说明，不凭一次通过抬高分数。
-  - 已知偏差：① 攻击种子是内置的固定集合（不含 promptfoo 的 strategy 组合生成器）；
-    ② 红线固定为 0，模板声明 `securityFail>0` 属于放宽，按现有"政策只能更严"的规则不予支持。
+  - 收尾更新：strategy 组合生成器已实现——`POST /security-seeds` 支持 `strategies`
+    （DIRECT / CONTEXT_OVERRIDE / ROLEPLAY_FRAME，可组合），同一种子 ×N 种包装变体，
+    策略名进 contentHash 保证互不冲突且导入幂等；DIRECT 保持旧 hash 口径兼容既有数据。
+  - 已知偏差：红线固定为 0，模板声明 `securityFail>0` 属于放宽，按现有"政策只能更严"的规则不予支持。
 
 #### R3-3 Judge 技术升级　✅ 已实现（CoT / 校准 few-shot / 多 judge 聚合与原文留痕）
 

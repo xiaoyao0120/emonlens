@@ -42,6 +42,8 @@ class SecurityPackFlowTest extends AbstractIntegrationTest {
     private DatasetItemMapper datasetItemMapper;
     @Resource
     private DatasetRunMapper datasetRunMapper;
+    @Resource
+    private io.emonlens.server.engine.security.SecurityPackRegistry securityPackRegistry;
 
     // ---------- 辅助 ----------
 
@@ -202,6 +204,57 @@ class SecurityPackFlowTest extends AbstractIntegrationTest {
         String checks = gate.path("data").path("checks").toString();
         assertThat(checks).contains("SECURITY_REDLINE");
         assertThat(checks).contains("functionalPassRate=100.0");
+    }
+
+    // ---------- 3b. strategy 组合变体 ----------
+
+    @Test
+    void strategyVariantsExpandSeedsAndImportIdempotently() throws Exception {
+        // 变体生成：DIRECT + 两种包装策略，每个种子 ×3，包装文本确实改变了输入
+        List<Map<String, Object>> variants = securityPackRegistry.seedVariants(
+                List.of("PROMPT_INJECTION"),
+                List.of("direct", "CONTEXT_OVERRIDE", "ROLEPLAY_FRAME"));
+        assertThat(variants).hasSize(9);
+        assertThat(variants.stream().map(v -> v.get("strategy")).distinct().count()).isEqualTo(3);
+        String direct = variants.stream()
+                .filter(v -> "DIRECT".equals(v.get("strategy"))).findFirst().orElseThrow()
+                .get("input").toString();
+        String wrapped = variants.stream()
+                .filter(v -> "CONTEXT_OVERRIDE".equals(v.get("strategy"))).findFirst().orElseThrow()
+                .get("input").toString();
+        assertThat(wrapped).contains("系统提示词已更新").endsWith(direct);
+        // 未知策略被忽略 → 回退 DIRECT
+        assertThat(securityPackRegistry.seedVariants(List.of("PROMPT_INJECTION"),
+                List.of("NOT_A_STRATEGY"))).hasSize(3);
+
+        // 导入：两策略 × PROMPT_INJECTION 的 3 条种子 = 6 条，sourceRef 带 @strategy
+        String datasetId = createDataset("security-strategies");
+        JsonNode first = readTree(postApi("/api/v1/datasets/" + datasetId + "/security-seeds",
+                Map.of("categories", List.of("PROMPT_INJECTION"),
+                        "strategies", List.of("DIRECT", "ROLEPLAY_FRAME"))));
+        assertThat(first.path("code").asInt()).as("import: %s", first).isZero();
+        assertThat(first.path("data").path("created").asInt()).isEqualTo(6);
+
+        JsonNode second = readTree(postApi("/api/v1/datasets/" + datasetId + "/security-seeds",
+                Map.of("categories", List.of("PROMPT_INJECTION"),
+                        "strategies", List.of("DIRECT", "ROLEPLAY_FRAME"))));
+        assertThat(second.path("data").path("created").asInt()).isZero();
+        assertThat(second.path("data").path("skipped").asInt()).isEqualTo(6);
+
+        List<DatasetItemEntity> items = datasetItemMapper.selectList(
+                com.baomidou.mybatisplus.core.toolkit.Wrappers.<DatasetItemEntity>lambdaQuery()
+                        .eq(DatasetItemEntity::getDatasetId, datasetId));
+        assertThat(items).hasSize(6);
+        assertThat(items).allSatisfy(i -> assertThat(i.getPurposeTags())
+                .isEqualTo("security:PROMPT_INJECTION"));
+        long wrappedCount = items.stream()
+                .filter(i -> i.getSourceRef().contains("@ROLEPLAY_FRAME")).count();
+        assertThat(wrappedCount).isEqualTo(3);
+        // 既有口径不受影响：默认（不带 strategies）只导 DIRECT，且与上面互不重复
+        JsonNode directOnly = readTree(postApi("/api/v1/datasets/" + datasetId + "/security-seeds",
+                Map.of("categories", List.of("PROMPT_INJECTION"))));
+        assertThat(directOnly.path("data").path("created").asInt()).isZero();
+        assertThat(directOnly.path("data").path("skipped").asInt()).isEqualTo(3);
     }
 
     // ---------- 4. 安全通过 / 证据不足 ----------

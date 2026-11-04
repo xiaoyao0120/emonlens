@@ -59,6 +59,6 @@ mvn -B -o test     # 322 用例
 4. **R2-3** 缓存指标按工作空间汇总未拆到评估器；蓝图覆盖只标注是否配置。
 5. **R2-4** 复跑已支持 `{"count":N}` 批量（容量不足如实返回 created/refused，真机实测）；散点仅成本横轴（自绘 SVG）。
 6. **R3-1** 仅 HTTP 直连（SDK runner 未实现）；目标达成靠模拟用户自评；被测 Agent 的 HTTP 调用无法由平台计量（模拟用户 LLM 调用已在预算熔断内，收尾时修正了此前错误记载）。
-7. **R3-2** 种子是固定集合；红线固定 0 不接受模板放宽；security 证据已接入五维信任分（VIOLATION → security 维度 0 分，收尾完成）。
+7. **R3-2** 红线固定 0 不接受模板放宽；security 证据已接入五维信任分（VIOLATION → security 维度 0 分）；strategy 组合生成器已实现（DIRECT/CONTEXT_OVERRIDE/ROLEPLAY_FRAME，收尾完成）。
 8. **R3-3** 校准 few-shot 是"判定倾向提示"而非原文片段；MEAN 策略下标签分歧仍判 UNKNOWN。
 9. **AWR** 各 completed 项尚未生成 AWR 验证报告（`completion_not_checked`）；`make verify` 需实例与密码。
