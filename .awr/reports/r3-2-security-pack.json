@@ -1,0 +1,30 @@
+{
+    "scope":  [
+                  "emonlens-server",
+                  "emonlens-ui",
+                  "docs"
+              ],
+    "version":  1,
+    "work_item":  "r3-2-security-pack",
+    "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
+    "source_sha":  "36c1cd29ae1f8a6ca339fe0ca9e6c29fa60178e0",
+    "checks":  [
+                   {
+                       "criteria":  [
+                                        "一次 run 能同时输出功能 Gate 与 security 维度证据"
+                                    ],
+                       "details":  "SecurityPackFlowTest 5/5 + 真机：/runs/{id}/security 同时给功能口径（functionalPassRate=100.0）与 security 维度（violations=3, OWASP LLM01），Gate 检查项 SECURITY_REDLINE 并存",
+                       "name":  "acceptance-1",
+                       "passed":  true
+                   },
+                   {
+                       "criteria":  [
+                                        "红线违例即使整体通过率 100% 也判 BLOCKED"
+                                    ],
+                       "details":  "SecurityPackFlowTest + 真机：功能 100% 且 3 条违例时 Gate=BLOCKED；security_run:VIOLATION 接入五维信任分（security 维度 0 分）",
+                       "name":  "acceptance-2",
+                       "passed":  true
+                   }
+               ],
+    "verified_at":  1793750491008
+}

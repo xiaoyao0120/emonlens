@@ -1,0 +1,30 @@
+{
+    "scope":  [
+                  "emonlens-server",
+                  "emonlens-ui",
+                  "docs"
+              ],
+    "version":  1,
+    "work_item":  "r3-1-conversation-sim",
+    "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
+    "source_sha":  "36c1cd29ae1f8a6ca339fe0ca9e6c29fa60178e0",
+    "checks":  [
+                   {
+                       "criteria":  [
+                                        "仿真会话完整入 trace 体系（可观测可回放）"
+                                    ],
+                       "details":  "ConversationSimFlowTest + 真机 Docker E2E：每轮一条 trace 共享 sessionId 可回放；/runs/{id}/simulation 返回 traceIds",
+                       "name":  "acceptance-1",
+                       "passed":  true
+                   },
+                   {
+                       "criteria":  [
+                                        "成本核算分 generation / simulation / judge 三相"
+                                    ],
+                       "details":  "ConversationSimFlowTest + 真机 E2E：usagePhases 三相分离（simulation 2c/240pt、generation 2c/80pt、judge 0c）",
+                       "name":  "acceptance-2",
+                       "passed":  true
+                   }
+               ],
+    "verified_at":  1793750491008
+}

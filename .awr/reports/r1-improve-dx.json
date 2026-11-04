@@ -1,0 +1,46 @@
+{
+    "scope":  [
+                  "emonlens-server",
+                  "emonlens-ui",
+                  "docs"
+              ],
+    "version":  1,
+    "work_item":  "r1-improve-dx",
+    "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
+    "source_sha":  "36c1cd29ae1f8a6ca339fe0ca9e6c29fa60178e0",
+    "checks":  [
+                   {
+                       "criteria":  [
+                                        "矩阵跑完可导出网格 CSV，Diff 结论可追溯到逐样本偏好记录，单格失败不中断整批"
+                                    ],
+                       "details":  "PlaygroundMatrixFlowTest 通过：矩阵抽样、单格失败不中断整批、网格 CSV 导出与 Diff 逐样本偏好（552403f 交付，后续回归持续通过）",
+                       "name":  "acceptance-1",
+                       "passed":  true
+                   },
+                   {
+                       "criteria":  [
+                                        "从 prompt 版本可反查被哪些 run 评过与 Gate 结论；production 换版后旧 Gate 自动失效"
+                                    ],
+                       "details":  "PromptRegistryFlowTest + FeatureParityTest 通过：prompt 版本反查 run/Gate 结论；production 换版后旧 Gate 判 PROMPT_BINDING 失效",
+                       "name":  "acceptance-2",
+                       "passed":  true
+                   },
+                   {
+                       "criteria":  [
+                                        "PR 评论幂等更新；Gate 非 PASS 时 Action 失败并列出检查项"
+                                    ],
+                       "details":  "FeatureParityTest + SDK ci.py 用例通过：PR 评论幂等更新、Gate 非 PASS 时 Action 失败并列检查项",
+                       "name":  "acceptance-3",
+                       "passed":  true
+                   },
+                   {
+                       "criteria":  [
+                                        "含 SDK 评测器的 run 与矩阵相关后端集成测试全部通过"
+                                    ],
+                       "details":  "SdkEvalFlowTest(7) 与矩阵相关集成测试在全量回归中通过",
+                       "name":  "acceptance-4",
+                       "passed":  true
+                   }
+               ],
+    "verified_at":  1793750491008
+}

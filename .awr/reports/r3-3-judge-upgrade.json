@@ -1,0 +1,30 @@
+{
+    "scope":  [
+                  "emonlens-server",
+                  "emonlens-ui",
+                  "docs"
+              ],
+    "version":  1,
+    "work_item":  "r3-3-judge-upgrade",
+    "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
+    "source_sha":  "36c1cd29ae1f8a6ca339fe0ca9e6c29fa60178e0",
+    "checks":  [
+                   {
+                       "criteria":  [
+                                        "few-shot 开启后同一批样本重跑一致率不降（回归守护）"
+                                    ],
+                       "details":  "JudgeUpgradeFlowTest + HttpLlmClientTest 通过：盲审一致样本注入校准提示（prompt 断言），判定模型确定时开关前后结论一致",
+                       "name":  "acceptance-1",
+                       "passed":  true
+                   },
+                   {
+                       "criteria":  [
+                                        "多 judge 冲突时按策略出 UNKNOWN 而非硬判"
+                                    ],
+                       "details":  "JudgeUpgradeFlowTest 通过：MAJORITY 平票与 CONSERVATIVE 分歧均 UNKNOWN；真机 E2E 双 judge 9/3 → run unknown=1、judgeCalls=2、judgeRecords 留痕",
+                       "name":  "acceptance-2",
+                       "passed":  true
+                   }
+               ],
+    "verified_at":  1793750491008
+}

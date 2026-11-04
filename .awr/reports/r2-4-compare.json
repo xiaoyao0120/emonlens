@@ -1,0 +1,22 @@
+{
+    "scope":  [
+                  "emonlens-server",
+                  "emonlens-ui",
+                  "docs"
+              ],
+    "version":  1,
+    "work_item":  "r2-4-compare",
+    "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
+    "source_sha":  "36c1cd29ae1f8a6ca339fe0ca9e6c29fa60178e0",
+    "checks":  [
+                   {
+                       "criteria":  [
+                                        "leaderboard 排序口径可解释，覆盖率不足的 run 显式降权"
+                                    ],
+                       "details":  "ExperimentInsightFlowTest 5/5：adjustedPassRate=均值通过率×覆盖率，coverage\u003c90 标 degraded 并写 rankingRule；真机实测降权生效；复跑支持 count 批量，容量不足如实返回 created/refused",
+                       "name":  "acceptance-1",
+                       "passed":  true
+                   }
+               ],
+    "verified_at":  1793750491008
+}

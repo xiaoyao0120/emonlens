@@ -1,0 +1,30 @@
+{
+    "scope":  [
+                  "emonlens-server",
+                  "emonlens-ui",
+                  "docs"
+              ],
+    "version":  1,
+    "work_item":  "r2-2-feedback",
+    "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
+    "source_sha":  "36c1cd29ae1f8a6ca339fe0ca9e6c29fa60178e0",
+    "checks":  [
+                   {
+                       "criteria":  [
+                                        "token 泄露场景只能写分数不能读正文"
+                                    ],
+                       "details":  "EndUserFeedbackFlowTest 6/6：token 只能写分不能读正文（40101，WebSecurityConfig 放行 /api/v1/feedback/**）",
+                       "name":  "acceptance-1",
+                       "passed":  true
+                   },
+                   {
+                       "criteria":  [
+                                        "correction 类反馈进数据集时走样本契约校验"
+                                    ],
+                       "details":  "EndUserFeedbackFlowTest 通过：correction 进数据集走 EvaluationCaseService 契约校验，非法 400",
+                       "name":  "acceptance-2",
+                       "passed":  true
+                   }
+               ],
+    "verified_at":  1793750491008
+}
