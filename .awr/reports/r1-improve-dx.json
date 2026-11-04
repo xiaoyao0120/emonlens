@@ -2,18 +2,19 @@
     "scope":  [
                   "emonlens-server",
                   "emonlens-ui",
+                  "scripts/e2e-ui",
                   "docs"
               ],
     "version":  1,
     "work_item":  "r1-improve-dx",
-    "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
-    "source_sha":  "be9ae6f68ef6fd76d53efd778fec3c0c358268f7",
+    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
+    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
     "checks":  [
                    {
                        "criteria":  [
                                         "矩阵跑完可导出网格 CSV，Diff 结论可追溯到逐样本偏好记录，单格失败不中断整批"
                                     ],
-                       "details":  "PlaygroundMatrixFlowTest 通过：矩阵抽样、单格失败不中断整批、网格 CSV 导出与 Diff 逐样本偏好（552403f 交付，后续回归持续通过）",
+                       "details":  "PlaygroundMatrixFlowTest 通过：矩阵抽样、单格失败不中断整批、网格 CSV 导出与 Diff 逐样本偏好（552403f 交付）",
                        "name":  "acceptance-1",
                        "passed":  true
                    },
@@ -37,10 +38,10 @@
                        "criteria":  [
                                         "含 SDK 评测器的 run 与矩阵相关后端集成测试全部通过"
                                     ],
-                       "details":  "SdkEvalFlowTest(7) 与矩阵相关集成测试在全量回归中通过",
+                       "details":  "SdkEvalFlowTest(7) 与矩阵相关集成测试在全量回归中通过；页面 E2E 覆盖矩阵页可正常打开",
                        "name":  "acceptance-4",
                        "passed":  true
                    }
                ],
-    "verified_at":  1793754608123
+    "verified_at":  1793759915330
 }

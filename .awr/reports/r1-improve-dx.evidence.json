@@ -1,18 +1,19 @@
 {
     "branch_id":  null,
-    "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
+    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
     "evidence_type":  "verification_report",
-    "external_key":  "r1-improve-dx@be9ae6f68ef6",
+    "external_key":  "r1-improve-dx@d29ff6cc12b6",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r1-improve-dx.json",
     "scope":  [
                   "emonlens-server",
                   "emonlens-ui",
+                  "scripts/e2e-ui",
                   "docs"
               ],
-    "sha256":  "1f6677fd1e390a92932c683501ff087900b114f2febe620eaa46cf95e9cb006f",
-    "source_sha":  "be9ae6f68ef6fd76d53efd778fec3c0c358268f7",
+    "sha256":  "d1f4700cd2dbae63127a3630ab3ad466c7f6741d60f36848841cce9a608da3e4",
+    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
     "summary":  "Completion report for r1-improve-dx",
-    "verified_at":  1793754608123,
+    "verified_at":  1793759915330,
     "work_item_key":  "r1-improve-dx"
 }

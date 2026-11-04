@@ -2,21 +2,22 @@
     "scope":  [
                   "emonlens-server",
                   "emonlens-ui",
+                  "scripts/e2e-ui",
                   "docs"
               ],
     "version":  1,
     "work_item":  "r2-3-quality-board",
-    "command":  "docker run --rm -v D:/soft/emonlens:/work -w /work -v emonlens_m2:/root/.m2 maven:3.9-eclipse-temurin-17 mvn -B -o test",
-    "source_sha":  "be9ae6f68ef6fd76d53efd778fec3c0c358268f7",
+    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
+    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
     "checks":  [
                    {
                        "criteria":  [
                                         "能回答哪个评估器最不可信、哪个数据集在腐烂"
                                     ],
-                       "details":  "EvaluatorQualityFlowTest 2/2 + 真机 GET/POST /evaluator-quality：leastTrusted 与 ROTTING/WARNING 可解释；POST /scan 24h 去重",
+                       "details":  "EvaluatorQualityFlowTest 2/2 + 真机 GET/POST /evaluator-quality；页面 E2E 在浏览器里点「扫描并写入告警」并断言出现「已写入…」反馈（真实写 Finding），且无 console error",
                        "name":  "acceptance-1",
                        "passed":  true
                    }
                ],
-    "verified_at":  1793754608123
+    "verified_at":  1793759915330
 }
