@@ -7,8 +7,8 @@
               ],
     "version":  1,
     "work_item":  "r1-improve-dx",
-    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
-    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (10 cases, incl. fake-llm matrix + playground)",
+    "source_sha":  "8c042bed366f5f94e2ead67292435ddec33d13bc",
     "checks":  [
                    {
                        "criteria":  [
@@ -38,10 +38,10 @@
                        "criteria":  [
                                         "含 SDK 评测器的 run 与矩阵相关后端集成测试全部通过"
                                     ],
-                       "details":  "SdkEvalFlowTest(7) 与矩阵相关集成测试在全量回归中通过；页面 E2E 覆盖矩阵页打开、系统设置配置 LLM 端点保存、试跑页真实调用假端点并渲染输出（9/9 绿）",
+                       "details":  "SdkEvalFlowTest(7) 与矩阵集成测试通过；页面 E2E 10/10 覆盖：矩阵页 ?datasetId= 深链 → 逐列填 prompt/模型 → 预估后二次提交 → 跑到 COMPLETED 且单元格渲染假端点回复；系统设置保存 LLM 端点；试跑真调用",
                        "name":  "acceptance-4",
                        "passed":  true
                    }
                ],
-    "verified_at":  1793761726917
+    "verified_at":  1793772835416
 }

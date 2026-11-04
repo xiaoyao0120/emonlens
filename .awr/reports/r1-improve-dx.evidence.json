@@ -1,8 +1,8 @@
 {
     "branch_id":  null,
-    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (10 cases, incl. fake-llm matrix + playground)",
     "evidence_type":  "verification_report",
-    "external_key":  "r1-improve-dx@1186b496ef96",
+    "external_key":  "r1-improve-dx@8c042bed366f",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r1-improve-dx.json",
     "scope":  [
@@ -11,9 +11,9 @@
                   "scripts/e2e-ui",
                   "docs"
               ],
-    "sha256":  "d1de3b4e5708dc637c49b1dcc34e8f911f0da9aa5f68eefa919b265ccb5bab91",
-    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
+    "sha256":  "b0cb432d3201c56ae2b274776cc185e8738da1c8cb33165e9d701bea6c5ad029",
+    "source_sha":  "8c042bed366f5f94e2ead67292435ddec33d13bc",
     "summary":  "Completion report for r1-improve-dx",
-    "verified_at":  1793761726917,
+    "verified_at":  1793772835416,
     "work_item_key":  "r1-improve-dx"
 }

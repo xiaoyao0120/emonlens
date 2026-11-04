@@ -7,8 +7,8 @@
               ],
     "version":  1,
     "work_item":  "r2-2-feedback",
-    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
-    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (10 cases, incl. fake-llm matrix + playground)",
+    "source_sha":  "8c042bed366f5f94e2ead67292435ddec33d13bc",
     "checks":  [
                    {
                        "criteria":  [
@@ -27,5 +27,5 @@
                        "passed":  true
                    }
                ],
-    "verified_at":  1793761726917
+    "verified_at":  1793772835416
 }

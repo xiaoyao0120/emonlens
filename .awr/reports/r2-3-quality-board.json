@@ -7,17 +7,17 @@
               ],
     "version":  1,
     "work_item":  "r2-3-quality-board",
-    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
-    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (10 cases, incl. fake-llm matrix + playground)",
+    "source_sha":  "8c042bed366f5f94e2ead67292435ddec33d13bc",
     "checks":  [
                    {
                        "criteria":  [
                                         "能回答哪个评估器最不可信、哪个数据集在腐烂"
                                     ],
-                       "details":  "EvaluatorQualityFlowTest 2/2 + 真机 GET/POST /evaluator-quality；页面 E2E 在浏览器点「扫描并写入告警」断言「已写入…」反馈（真实写 Finding），无 console error",
+                       "details":  "EvaluatorQualityFlowTest 2/2 + 真机 GET/POST /evaluator-quality；页面 E2E 在浏览器点「扫描并写入告警」断言「已写入…」反馈，无 console error",
                        "name":  "acceptance-1",
                        "passed":  true
                    }
                ],
-    "verified_at":  1793761726917
+    "verified_at":  1793772835416
 }

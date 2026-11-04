@@ -1,8 +1,8 @@
 {
     "branch_id":  null,
-    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (10 cases, incl. fake-llm matrix + playground)",
     "evidence_type":  "verification_report",
-    "external_key":  "r2-4-compare@1186b496ef96",
+    "external_key":  "r2-4-compare@8c042bed366f",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r2-4-compare.json",
     "scope":  [
@@ -11,9 +11,9 @@
                   "scripts/e2e-ui",
                   "docs"
               ],
-    "sha256":  "1d45a47910c96e455d77d2dc0ec335d2a5afe9366ce4e13a4d349bd858feade3",
-    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
+    "sha256":  "89032202641d0349aa78997cbb51d9ff86c37d32f116ff74bfcfe47dd7f140ea",
+    "source_sha":  "8c042bed366f5f94e2ead67292435ddec33d13bc",
     "summary":  "Completion report for r2-4-compare",
-    "verified_at":  1793761726917,
+    "verified_at":  1793772835416,
     "work_item_key":  "r2-4-compare"
 }

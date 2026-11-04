@@ -1,8 +1,8 @@
 {
     "branch_id":  null,
-    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (10 cases, incl. fake-llm matrix + playground)",
     "evidence_type":  "verification_report",
-    "external_key":  "r3-1-conversation-sim@1186b496ef96",
+    "external_key":  "r3-1-conversation-sim@8c042bed366f",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r3-1-conversation-sim.json",
     "scope":  [
@@ -11,9 +11,9 @@
                   "scripts/e2e-ui",
                   "docs"
               ],
-    "sha256":  "60bac346b778d894949ea79ad65e98275880ffd334c5d14555e94e9aa5075f94",
-    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
+    "sha256":  "277491e5b4887cbdf5f497bba8ea96cc9fda459a384d7cedd6e908370bc67d61",
+    "source_sha":  "8c042bed366f5f94e2ead67292435ddec33d13bc",
     "summary":  "Completion report for r3-1-conversation-sim",
-    "verified_at":  1793761726917,
+    "verified_at":  1793772835416,
     "work_item_key":  "r3-1-conversation-sim"
 }
