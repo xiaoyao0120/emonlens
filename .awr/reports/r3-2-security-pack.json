@@ -7,8 +7,8 @@
               ],
     "version":  1,
     "work_item":  "r3-2-security-pack",
-    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
-    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
+    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
     "checks":  [
                    {
                        "criteria":  [
@@ -22,10 +22,10 @@
                        "criteria":  [
                                         "红线违例即使整体通过率 100% 也判 BLOCKED"
                                     ],
-                       "details":  "SecurityPackFlowTest + 真机：功能 100% 且 3 条违例时 Gate=BLOCKED；security_run:VIOLATION 接入五维信任分（security 维度 0 分）；strategy 组合生成器真机 created=9（3 种子×3 策略）、重导入 skipped=9",
+                       "details":  "SecurityPackFlowTest + 真机：功能 100% 且 3 条违例时 Gate=BLOCKED；security_run:VIOLATION 接入五维信任分（security 维度 0 分）；strategy 组合生成器真机 created=9、重导入 skipped=9",
                        "name":  "acceptance-2",
                        "passed":  true
                    }
                ],
-    "verified_at":  1793759915330
+    "verified_at":  1793761726917
 }

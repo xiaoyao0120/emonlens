@@ -7,17 +7,17 @@
               ],
     "version":  1,
     "work_item":  "r2-3-quality-board",
-    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
-    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
+    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
     "checks":  [
                    {
                        "criteria":  [
                                         "能回答哪个评估器最不可信、哪个数据集在腐烂"
                                     ],
-                       "details":  "EvaluatorQualityFlowTest 2/2 + 真机 GET/POST /evaluator-quality；页面 E2E 在浏览器里点「扫描并写入告警」并断言出现「已写入…」反馈（真实写 Finding），且无 console error",
+                       "details":  "EvaluatorQualityFlowTest 2/2 + 真机 GET/POST /evaluator-quality；页面 E2E 在浏览器点「扫描并写入告警」断言「已写入…」反馈（真实写 Finding），无 console error",
                        "name":  "acceptance-1",
                        "passed":  true
                    }
                ],
-    "verified_at":  1793759915330
+    "verified_at":  1793761726917
 }

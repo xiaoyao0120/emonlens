@@ -1,8 +1,8 @@
 {
     "branch_id":  null,
-    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
     "evidence_type":  "verification_report",
-    "external_key":  "r2-1-rules-v2@d29ff6cc12b6",
+    "external_key":  "r2-1-rules-v2@1186b496ef96",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r2-1-rules-v2.json",
     "scope":  [
@@ -11,9 +11,9 @@
                   "scripts/e2e-ui",
                   "docs"
               ],
-    "sha256":  "b0aad121ebf0084f60efb042ae3b40327c8df4f85fd375f8c57a8a0e5f5d3369",
-    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
+    "sha256":  "41863abcc0d52efe3fea392d90500689e07485176385922fc544dc7ed9495087",
+    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
     "summary":  "Completion report for r2-1-rules-v2",
-    "verified_at":  1793759915330,
+    "verified_at":  1793761726917,
     "work_item_key":  "r2-1-rules-v2"
 }

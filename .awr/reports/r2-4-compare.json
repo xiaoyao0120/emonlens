@@ -7,17 +7,17 @@
               ],
     "version":  1,
     "work_item":  "r2-4-compare",
-    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
-    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
+    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
     "checks":  [
                    {
                        "criteria":  [
                                         "leaderboard 排序口径可解释，覆盖率不足的 run 显式降权"
                                     ],
-                       "details":  "ExperimentInsightFlowTest 5/5：adjustedPassRate=均值通过率×覆盖率，coverage\u003c90 标 degraded 并写 rankingRule；复跑支持 count 批量，容量不足如实返回 created/refused；页面 E2E 通过 ?datasetId= 深链断言散点 ≥1 点、排行表有百分比行",
+                       "details":  "ExperimentInsightFlowTest 5/5：adjustedPassRate=均值通过率×覆盖率，coverage\u003c90 标 degraded 并写 rankingRule；复跑支持 count 批量，容量不足如实返回 created/refused；页面 E2E 通过 ?datasetId= 深链断言散点 ≥1 点、排行表有百分比行，并守卫圆点半径/坐标非 NaN",
                        "name":  "acceptance-1",
                        "passed":  true
                    }
                ],
-    "verified_at":  1793759915330
+    "verified_at":  1793761726917
 }

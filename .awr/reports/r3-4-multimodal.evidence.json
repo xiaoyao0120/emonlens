@@ -1,8 +1,8 @@
 {
     "branch_id":  null,
-    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
     "evidence_type":  "verification_report",
-    "external_key":  "r3-4-multimodal@d29ff6cc12b6",
+    "external_key":  "r3-4-multimodal@1186b496ef96",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r3-4-multimodal.json",
     "scope":  [
@@ -11,9 +11,9 @@
                   "scripts/e2e-ui",
                   "docs"
               ],
-    "sha256":  "43108f9482fb1af08da140d70ed36bba3bc428d66e10cc8a6149b6a183dcd28b",
-    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
+    "sha256":  "c9c9433cb033be9736ef21a25c6040e0c30645c6a8753c554e009018e700bcb6",
+    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
     "summary":  "Completion report for r3-4-multimodal",
-    "verified_at":  1793759915330,
+    "verified_at":  1793761726917,
     "work_item_key":  "r3-4-multimodal"
 }

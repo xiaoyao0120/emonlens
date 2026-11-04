@@ -1,8 +1,8 @@
 {
     "branch_id":  null,
-    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
     "evidence_type":  "verification_report",
-    "external_key":  "r2-3-quality-board@d29ff6cc12b6",
+    "external_key":  "r2-3-quality-board@1186b496ef96",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r2-3-quality-board.json",
     "scope":  [
@@ -11,9 +11,9 @@
                   "scripts/e2e-ui",
                   "docs"
               ],
-    "sha256":  "175a7f2045bb50c0a814c0a1c87c501e2cfb576224faeca308a7eb924a45c980",
-    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
+    "sha256":  "eb951d215e3d9cc102177ae2e10ca1843f60da0f6193d07aa850981807218c2c",
+    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
     "summary":  "Completion report for r2-3-quality-board",
-    "verified_at":  1793759915330,
+    "verified_at":  1793761726917,
     "work_item_key":  "r2-3-quality-board"
 }

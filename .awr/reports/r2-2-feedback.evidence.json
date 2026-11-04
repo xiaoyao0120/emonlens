@@ -1,8 +1,8 @@
 {
     "branch_id":  null,
-    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
     "evidence_type":  "verification_report",
-    "external_key":  "r2-2-feedback@d29ff6cc12b6",
+    "external_key":  "r2-2-feedback@1186b496ef96",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r2-2-feedback.json",
     "scope":  [
@@ -11,9 +11,9 @@
                   "scripts/e2e-ui",
                   "docs"
               ],
-    "sha256":  "e44029a16386e572014890d72b94bb28ef8553a74e0812da3c006135953b1bbe",
-    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
+    "sha256":  "1e1fcf04f883b74d86a6aacd2c471f6daafb61ea532e34f64fb67e11e07ab167",
+    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
     "summary":  "Completion report for r2-2-feedback",
-    "verified_at":  1793759915330,
+    "verified_at":  1793761726917,
     "work_item_key":  "r2-2-feedback"
 }

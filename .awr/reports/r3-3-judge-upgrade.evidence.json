@@ -1,8 +1,8 @@
 {
     "branch_id":  null,
-    "command":  "docker run --rm --network emonlens-uie2e -v D:/soft/emonlens/scripts/e2e-ui:/work -w /work -e EMONLENS_BASE_URL=http://emonlens-uiapp:8300 mcr.microsoft.com/playwright:v1.47.2-junit npx playwright test  # + backend: mvn -B -o test",
+    "command":  "mvn -B -o test  # backend;  scripts/e2e-ui: npx playwright test (9 cases, incl. fake-llm model chain)",
     "evidence_type":  "verification_report",
-    "external_key":  "r3-3-judge-upgrade@d29ff6cc12b6",
+    "external_key":  "r3-3-judge-upgrade@1186b496ef96",
     "level":  "locally_verified",
     "locator":  "D:\\soft\\emonlens\\.awr\\reports\\r3-3-judge-upgrade.json",
     "scope":  [
@@ -11,9 +11,9 @@
                   "scripts/e2e-ui",
                   "docs"
               ],
-    "sha256":  "dc8b093c39abfa494e6c801a5cd2859224ca73c7144efd5f62033ded0d7898bd",
-    "source_sha":  "d29ff6cc12b60bd6ca0fe158ed8853e818fdb47e",
+    "sha256":  "3ccdbc7d8ab6c914860ffc8e712d2992a2dc9a6618e7b11b2c9269ef82e0b05e",
+    "source_sha":  "1186b496ef965e919b8d2ba253896561bb1f5768",
     "summary":  "Completion report for r3-3-judge-upgrade",
-    "verified_at":  1793759915330,
+    "verified_at":  1793761726917,
     "work_item_key":  "r3-3-judge-upgrade"
 }
