@@ -44,7 +44,8 @@ docker run --rm -v <repo>:/work -w /work -v emonlens_m2:/root/.m2 \
 mvn -B -o test     # 322 用例
 ```
 
-最近一次干净全量：**323 用例，1 个失败**——`SecurityPackFlowTest.secureSamplesPassAndUnknownSamplesBlock` 在 60s await 超时（高负载下的时序抖动），单独重跑 **4/4 通过**。
+最近一次干净全量（收尾轮，含信任分/批量复跑/词表配置与 AWR 验证报告后的最终代码）：**325 用例，0 失败 0 错误**
+（分两段执行：字母序 A–P 275/275 绿 + S–W 补跑 50/50 绿；此前 323 用例 1 失败的时序抖动未再出现）。
 
 > 说明：并发跑 Maven（同一 `target/`）会互相覆盖产物，曾造成一次 10F/77E 的假失败；该结果已作废，不是代码问题。
 
