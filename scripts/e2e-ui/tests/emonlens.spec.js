@@ -557,6 +557,57 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
+  test('发布领域包并绑定到数据集', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const packKey = `e2e-bind-${RUN_STAMP}-${Date.now().toString(36)}`;
+    expect(sharedDatasetId, '依赖前面用例创建的数据集').toBeTruthy();
+
+    await login(page);
+    // 1) 发布一个领域包（manifest 用弹窗预填的合法模板）
+    await page.goto('/domain-packs');
+    await page.getByRole('button', { name: /发布领域包版本/ }).click();
+    await page.getByPlaceholder('customer-support').fill(packKey);
+    await page.getByPlaceholder('1.0.0').fill('1.0.0');
+    await page.getByPlaceholder(/如 客服领域包/).fill(`绑定用领域包 ${RUN_STAMP}`);
+    await page.getByRole('button', { name: '发布', exact: true }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已发布/, { timeout: 30_000 });
+
+    // 2) 到数据集里绑定它
+    await page.goto(`/datasets/${sharedDatasetId}`);
+    await expect(page.locator('.base-page').first()).toBeVisible({ timeout: 30_000 });
+    // 「绑定领域包」在「样本与设置」页签里，不是默认页签
+    const dataTab = page.locator('.n-tabs-tab').filter({ hasText: '样本与设置' }).first();
+    await expect(dataTab).toBeVisible({ timeout: 30_000 });
+    await dataTab.click({ timeout: 10_000 });
+    await page.getByRole('button', { name: /绑定领域包/ }).click();
+    const packSelect = page
+      .locator('.n-base-selection')
+      .filter({ has: page.locator('.n-base-selection-placeholder') })
+      .first();
+    await packSelect.click();
+    await page.locator('.n-base-select-option:visible').filter({ hasText: packKey }).first()
+      .click({ timeout: 15_000 });
+    await page.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已绑定领域包/, { timeout: 30_000 });
+
+    // 3) 绑定真的生效：刷新后页面回到默认页签，需要重新切到「样本与设置」再看健康卡
+    await page.reload();
+    const dataTabAfterReload = page.locator('.n-tabs-tab').filter({ hasText: '样本与设置' }).first();
+    await expect(dataTabAfterReload).toBeVisible({ timeout: 30_000 });
+    await dataTabAfterReload.click({ timeout: 10_000 });
+    await expect(page.locator('body')).toContainText(/蓝图来源/, { timeout: 30_000 });
+    await expect(page.locator('body')).toContainText(/领域包/, { timeout: 30_000 });
+
+    // 4) API 侧确认绑定落库
+    const auth = { Authorization: `Bearer ${token}` };
+    const health = await (
+      await ctx.get(`/api/v1/datasets/${sharedDatasetId}/health`, { headers: auth })
+    ).json();
+    expect(health?.data?.domainPackId, `绑定应写回 dataset: ${JSON.stringify(health?.data || {})}`).toBeTruthy();
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
   test('发布领域包版本后出现在列表', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     const packKey = `e2e-pack-${RUN_STAMP}-${Date.now().toString(36)}`;
