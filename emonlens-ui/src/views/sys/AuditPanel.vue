@@ -46,7 +46,9 @@ import EmptyState from '@/components/EmptyState.vue'
 import Modal from '@/components/Modal.vue'
 
 const message = useMessage()
-const q = reactive({ username: '', action: '' })
+// action 初始必须是 null：tag 模式下空字符串会被当作"一个空标签"渲染成空白 chip，
+// 占位文本「操作类型（可选可输）」因此不显示（页面 E2E 抓到的可用性问题）
+const q = reactive({ username: '', action: null })
 const timeRange = ref('7d')
 const records = ref([]), loading = ref(false), exporting = ref(false)
 const showDetail = ref(false), detailRow = ref(null)

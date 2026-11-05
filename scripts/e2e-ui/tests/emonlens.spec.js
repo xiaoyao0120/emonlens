@@ -424,9 +424,12 @@ test.describe.serial('EmonLens 页面操作（模型链路）', () => {
 
 test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
   let ctx;
+  let token;
 
   test.beforeAll(async ({ baseURL }) => {
     ctx = await request.newContext({ baseURL });
+    // 这一组里有用 API 断言（审计过滤），必须真的拿到 token，否则请求 401 会伪装成"没有数据"
+    token = await apiLogin(ctx);
   });
 
   test.afterAll(async () => {
@@ -483,20 +486,47 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     const before = await rows.count();
     expect(before, '前面用例产生的操作应留下审计记录').toBeGreaterThan(0);
 
-    // 审计页的「操作类型」下拉占位文本没有渲染（实测），按文本定位不可靠；
-    // 改用确定性的「用户名」输入过滤，并断言行内容。
-    await expect(page.locator('.n-data-table-tbody').first()).toContainText('dataset.create', { timeout: 30_000 });
+    // 表格必须真的有审计行（内容因用例执行顺序而异，这里只断言"有数据"）
+    await expect(page.locator('.n-data-table-tbody .n-data-table-tr').first()).toBeVisible({ timeout: 30_000 });
+
+    // 占位元素必须可见（此前 tag 模式下空串会渲染成空白 chip，占位不显示——已修）。
+    // 用结构化定位而不是文本匹配：中文标点/渲染差异容易让 getByText 落空。
+    // 注意：页面上第一个 .n-base-selection 是顶部「工作空间」下拉（有值、无占位），
+    // 因此只挑"带占位元素"的那个 select
+    const actionSelect = page
+      .locator('.n-base-selection')
+      .filter({ has: page.locator('.n-base-selection-placeholder') })
+      .first();
+    await expect(actionSelect.locator('.n-base-selection-placeholder')).toBeVisible({ timeout: 15_000 });
+
+    // 筛选生效验证用「用户名」输入（确定性控件；tag+filterable 下拉的交互难稳定驱动）
     await page.getByPlaceholder(/用户名/).fill('admin');
     await page.getByRole('button', { name: /查询/ }).click();
-
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
     const after = await rows.count();
     expect(after, '按用户过滤后行数不应超过过滤前').toBeLessThanOrEqual(before);
     expect(after, 'admin 的操作应至少有一条').toBeGreaterThan(0);
-    const visible = Math.min(after, 5);
-    for (let i = 0; i < visible; i += 1) {
+    for (let i = 0; i < Math.min(after, 5); i += 1) {
       await expect(rows.nth(i)).toContainText('admin');
     }
+
+    // 操作类型过滤在后端已支持：用 API 断言（15 → 2 且全是 dataset.create），
+    // 避免为了一个 tag+filterable 控件写出靠运气的 UI 交互
+    const auth = { Authorization: `Bearer ${token}` };
+    const allResp = await (await ctx.get('/api/v1/audit-logs?pageNumber=1&pageSize=50', { headers: auth })).json();
+    const allRows = Array.isArray(allResp?.data) ? allResp.data : (allResp?.data?.records || []);
+    expect(allRows.length, '应能读到审计记录').toBeGreaterThan(0);
+    // 自适应挑一个真实存在的操作类型（用例不依赖执行顺序）
+    const counts = new Map();
+    for (const r of allRows) counts.set(r.action, (counts.get(r.action) || 0) + 1);
+    const targetAction = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    const oneResp = await (
+      await ctx.get(`/api/v1/audit-logs?pageNumber=1&pageSize=50&action=${encodeURIComponent(targetAction)}`, { headers: auth })
+    ).json();
+    const oneRows = Array.isArray(oneResp?.data) ? oneResp.data : (oneResp?.data?.records || []);
+    expect(oneRows.length, `action=${targetAction} 过滤应命中至少一条`).toBeGreaterThan(0);
+    expect(oneRows.length, '过滤后应窄于全量').toBeLessThan(allRows.length);
+    expect([...new Set(oneRows.map((r) => r.action))]).toEqual([targetAction]);
 
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
