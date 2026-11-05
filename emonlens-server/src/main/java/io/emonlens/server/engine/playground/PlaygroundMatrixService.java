@@ -928,6 +928,27 @@ public class PlaygroundMatrixService {
             throw new EmonLensException(ErrorCode.BAD_REQUEST,
                     "矩阵没有挂评估器，无法升格为正式实验；请重建矩阵并在 evaluatorIds 里指定");
         }
+        // 升格固定用 REPLAY 模式：样本没有 input 文本就没有可重放的提示词，
+        // 强行升格只会造出一个必然 FAILED 的 run（每条 ERROR「样本缺少 input」）。
+        // 这里提前拦下并给可操作提示，避免用户拿到一条无意义的失败记录。
+        List<io.emonlens.server.storage.entity.DatasetItemEntity> promotableItems =
+                datasetItemMapper.selectList(
+                        com.baomidou.mybatisplus.core.toolkit.Wrappers
+                                .<io.emonlens.server.storage.entity.DatasetItemEntity>lambdaQuery()
+                                .eq(io.emonlens.server.storage.entity.DatasetItemEntity::getDatasetId,
+                                        matrix.getDatasetId())
+                                .eq(io.emonlens.server.storage.entity.DatasetItemEntity::getStatus, "ACTIVE"));
+        long withInput = promotableItems.stream()
+                .filter(i -> i.getInput() != null && !i.getInput().isBlank()).count();
+        if (promotableItems.isEmpty()) {
+            throw new EmonLensException(ErrorCode.BAD_REQUEST,
+                    "数据集没有可用样本，无法升格为正式实验");
+        }
+        if (withInput == 0) {
+            throw new EmonLensException(ErrorCode.BAD_REQUEST,
+                    "数据集里的样本都没有 input 文本，REPLAY 模式无法重放；"
+                            + "请给样本补 input，或改用 TRACE 模式跑评测");
+        }
         PromptService.PromptRef promptRef = null;
         if (column.get("promptName") != null) {
             promptRef = new PromptService.PromptRef(String.valueOf(column.get("promptName")),

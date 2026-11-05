@@ -42,6 +42,8 @@ class PlaygroundMatrixFlowTest extends AbstractIntegrationTest {
 
     @Resource
     private FakeLlm fakeLlm;
+    @Resource
+    private io.emonlens.server.storage.mapper.DatasetItemMapper datasetItemMapper;
 
     @TestConfiguration
     static class FakeLlmConfig {
@@ -359,6 +361,34 @@ class PlaygroundMatrixFlowTest extends AbstractIntegrationTest {
 
     // ---------- 3. 升格 + prompt 绑定 + Gate 失效 ----------
 
+    @Test
+    void promoteRejectsDatasetWhoseSamplesHaveNoInput() throws Exception {
+        // 升格固定 REPLAY：样本只有 traceId、没有 input 时无法重放。
+        // 以前会静默造出一个必然 FAILED 的 run（每条 ERROR「样本缺少 input」），现在提前 400。
+        String datasetId = createDataset("matrix-promote-no-input");
+        addItem(datasetId, "正常样本 input", "正常样本 output");
+        String evaluatorId = exactMatchEvaluator("matrix-promote-no-input-exact");
+        String matrixId = createMatrix(datasetId,
+                List.of(column("c1", FakeLlm.MODEL_GOOD, null, null)),
+                List.of(evaluatorId), "matrix-promote-no-input-1").path("data").path("id").asText();
+        // 建好矩阵后把样本 input 清空：模拟"只有 traceId / 没有可重放提示词"的数据集
+        List<io.emonlens.server.storage.entity.DatasetItemEntity> items = datasetItemMapper.selectList(
+                com.baomidou.mybatisplus.core.toolkit.Wrappers
+                        .<io.emonlens.server.storage.entity.DatasetItemEntity>lambdaQuery()
+                        .eq(io.emonlens.server.storage.entity.DatasetItemEntity::getDatasetId, datasetId));
+        for (io.emonlens.server.storage.entity.DatasetItemEntity it : items) {
+            // 注意：MP 的 updateById 默认忽略 null 字段，必须用空串才能真正清空
+            it.setInput("");
+            datasetItemMapper.updateById(it);
+        }
+
+        JsonNode promote = readTree(postApi(
+                "/api/v1/playground/matrices/" + matrixId + "/columns/c1/promote", Map.of()));
+        assertThat(promote.path("code").asInt())
+                .as("trace-only 样本升格必须被拒: %s", promote).isEqualTo(40000);
+        assertThat(promote.path("message").asText())
+                .contains("input").contains("REPLAY");
+    }
     @Test
     void promoteBindsPromptVersionAndProductionMoveInvalidatesTheGate() throws Exception {
         String datasetId = createDataset("matrix-promote");

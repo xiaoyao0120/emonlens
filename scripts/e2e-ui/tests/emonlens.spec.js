@@ -20,6 +20,7 @@ const DATASET_KEY = `ui-e2e-ds-${RUN_STAMP}`;
 const BOARD_DATASET_KEY = `ui-e2e-board-${RUN_STAMP}`;
 // 跨 describe 共享：第一个 describe 里建好的数据集，模型链路 describe 的矩阵用例要复用
 let sharedDatasetId = null;
+let sharedEvaluatorKey = null;
 
 const IGNORED_CONSOLE = [/favicon/i, /ResizeObserver/i, /Failed to load resource/i];
 
@@ -105,7 +106,7 @@ async function seedDatasetWithRun(ctx, token) {
   const item = await (
     await ctx.post(`/api/v1/datasets/${datasetId}/items`, {
       headers: auth,
-      data: { traceId: TRACE_ID },
+      data: { traceId: TRACE_ID, input: '请帮我查一下订单状态', expectedOutput: '您的订单已发货' },
     })
   ).json();
   expect(item.code, JSON.stringify(item)).toBe(0);
@@ -139,7 +140,7 @@ async function seedDatasetWithRun(ctx, token) {
     if (status === 'COMPLETED' || status === 'FAILED') break;
     await new Promise((r) => setTimeout(r, 500));
   }
-  return datasetId;
+  return { datasetId, evaluatorKey: `ui-e2e-expr-${RUN_STAMP}` };
 }
 
 test.describe.serial('EmonLens 页面操作', () => {
@@ -212,8 +213,10 @@ test.describe.serial('EmonLens 页面操作', () => {
 
   test('实验排行：选中数据集后散点与排行表渲染', async ({ page }) => {
     const errors = collectConsoleErrors(page);
-    datasetId = await seedDatasetWithRun(ctx, token);
+    const seeded = await seedDatasetWithRun(ctx, token);
+    datasetId = seeded.datasetId;
     sharedDatasetId = datasetId;
+    sharedEvaluatorKey = seeded.evaluatorKey;
     await login(page);
     // 用 ?datasetId= 深链进入：报表可分享，也让 E2E 不依赖下拉交互
     await page.goto(`/experiment-leaderboard?datasetId=${datasetId}`);
@@ -272,6 +275,17 @@ test.describe.serial('EmonLens 页面操作', () => {
 
 test.describe.serial('EmonLens 页面操作（模型链路）', () => {
   const FAKE_LLM_URL = process.env.FAKE_LLM_URL || 'http://fake-llm:8080/v1';
+  let ctx;
+  let token;
+
+  test.beforeAll(async ({ baseURL }) => {
+    ctx = await request.newContext({ baseURL });
+    token = await apiLogin(ctx);
+  });
+
+  test.afterAll(async () => {
+    await ctx?.dispose();
+  });
 
   test('系统设置里配置 LLM 端点并保存生效', async ({ page }) => {
     const errors = collectConsoleErrors(page);
@@ -300,6 +314,15 @@ test.describe.serial('EmonLens 页面操作（模型链路）', () => {
     await page.goto(`/matrix?datasetId=${sharedDatasetId}`);
     await expect(page.locator('.base-page').first()).toBeVisible();
 
+    // 升格为正式实验要求矩阵挂评估器：在多选里选中造数时创建的那个
+    await page.locator('.n-base-selection').filter({ hasText: '挂评估器' }).click();
+    await page
+      .locator('.n-base-select-option:visible')
+      .filter({ hasText: sharedEvaluatorKey })
+      .first()
+      .click({ timeout: 10_000 });
+    await page.keyboard.press('Escape');
+
     // 矩阵页默认就有多列（空 prompt）——必须把**每一列**都填上，否则后端会以
     // 「第 N 列缺少 prompt」拒绝提交。没有列时才需要新增。
     if ((await page.getByPlaceholder(/列名/).count()) === 0) {
@@ -326,6 +349,58 @@ test.describe.serial('EmonLens 页面操作（模型链路）', () => {
     // 轮询到终态，并断言单元格里出现假端点的回复
     await expect(page.locator('body')).toContainText(/COMPLETED|PARTIAL/, { timeout: 120_000 });
     await expect(page.locator('.cell-out').first()).toContainText('fake-llm-ok', { timeout: 120_000 });
+
+    // Diff：base / 对比列各选第一项，judge 用假端点模型；结果汇总（改进/退步/持平计数）必须渲染
+    const diffSelects = page.locator('.diff-bar .n-base-selection');
+    // naive-ui 会把关闭过的下拉菜单留在 DOM 里（display:none），必须只点"可见"的选项
+    await diffSelects.nth(0).click();
+    await page.locator('.n-base-select-option:visible').first().click({ timeout: 10_000 });
+    await diffSelects.nth(1).click();
+    // 对比列必须与 base 不同列：矩阵默认只有 2 列，选第二个可见选项（c2）
+    await page.locator('.n-base-select-option:visible').nth(1).click({ timeout: 10_000 });
+    await page.getByPlaceholder(/judge 模型/).fill('fake-model');
+    await page.getByRole('button', { name: '对比', exact: true }).click();
+    await expect(page.locator('.diff-summary')).toBeVisible({ timeout: 60_000 });
+
+    // 升格为正式实验：弹窗自动预选列 → 填运行标签与提交号 → 确认
+    await page.getByRole('button', { name: /升格为正式实验/ }).click();
+    const labelInput = page.getByPlaceholder(/^baseline$/);
+    await expect(labelInput).toBeVisible({ timeout: 10_000 });
+    await labelInput.fill('baseline');
+    await page.getByPlaceholder(/commit SHA/).fill(`e2e-${RUN_STAMP}`);
+    await page.getByRole('button', { name: '升格', exact: true }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已升格为正式实验/, { timeout: 60_000 });
+    const promotedText = await page.locator('.n-message').last().textContent();
+    const runIdMatch = promotedText && promotedText.match(/[0-9a-f]{16,}/);
+    expect(runIdMatch, `升格消息应携带 runId: ${promotedText}`).toBeTruthy();
+
+    // 桥接验证：数据集确实多了一个 runLabel=baseline 的正式 run，并跑到终态
+    const auth = { Authorization: `Bearer ${token}` };
+    const list = await (
+      await ctx.get(`/api/v1/datasets/${sharedDatasetId}/runs?pageNumber=1&pageSize=10`, { headers: auth })
+    ).json();
+    // 该端点返回 data 直接是数组（不是分页对象），两种形状都兼容
+    const runs = Array.isArray(list?.data) ? list.data : (list?.data?.records || []);
+    let promotedRun = runs.find((r) => r.runLabel === 'baseline');
+    // 升格是异步受理：run 可能刚创建还没出现在列表里，短暂重试
+    for (let i = 0; i < 20 && !promotedRun; i += 1) {
+      await new Promise((r) => setTimeout(r, 500));
+      const again = await (
+        await ctx.get(`/api/v1/datasets/${sharedDatasetId}/runs?pageNumber=1&pageSize=10`, { headers: auth })
+      ).json();
+      const rows = Array.isArray(again?.data) ? again.data : (again?.data?.records || []);
+      promotedRun = rows.find((r) => r.runLabel === 'baseline');
+    }
+    expect(promotedRun, '升格应产生 runLabel=baseline 的正式 run').toBeTruthy();
+    let promotedStatus = promotedRun.status;
+    for (let i = 0; i < 60 && promotedStatus !== 'COMPLETED' && promotedStatus !== 'FAILED'; i += 1) {
+      await new Promise((r) => setTimeout(r, 500));
+      const d = await (
+        await ctx.get(`/api/v1/datasets/${sharedDatasetId}/runs/${promotedRun.id}`, { headers: auth })
+      ).json();
+      promotedStatus = d?.data?.run?.status;
+    }
+    expect(promotedStatus, '升格出的正式 run 应跑到 COMPLETED').toBe('COMPLETED');
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
