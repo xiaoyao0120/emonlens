@@ -513,3 +513,41 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 });
+// ---------------------------------------------------------------------------
+// 人工复核（标注队列）：建队列 → 加样本 → 逐条标注 → 队列完成。
+// 这是唯一"人打分计入信任分"的界面链路，此前没被页面 E2E 覆盖。
+// ---------------------------------------------------------------------------
+
+test.describe.serial('EmonLens 页面操作（人工复核）', () => {
+  test('建队列、加样本、标注一条并完成队列', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const queueName = `e2e-queue-${RUN_STAMP}`;
+    await login(page);
+    await page.goto('/annotation-queues');
+
+    await page.getByRole('button', { name: /新建队列/ }).click();
+    await page.getByPlaceholder(/如 客服助手周度抽检/).fill(queueName);
+    await page.getByRole('button', { name: '创建', exact: true }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/队列已创建/, { timeout: 30_000 });
+
+    const row = page.locator('.n-data-table-tr').filter({ hasText: queueName }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await row.click();
+    await expect(page).toHaveURL(/\/annotation-queues\/[0-9a-f]+/);
+    await expect(page.locator('body')).toContainText(queueName);
+
+    // 加入一条待标注样本（用第一个 describe 里入库的那条 trace）
+    await page.getByRole('button', { name: /添加样本/ }).click();
+    await page.getByPlaceholder(/trace-8f3a2b/).fill(TRACE_ID);
+    await page.getByRole('button', { name: '添加', exact: true }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已添加/, { timeout: 30_000 });
+
+    // 标注：点「提交并下一条」，队列只有一条 → 应提示已标注并显示全部完成
+    await expect(page.getByRole('button', { name: /提交并下一条/ })).toBeVisible({ timeout: 30_000 });
+    await page.getByRole('button', { name: /提交并下一条/ }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已标注/, { timeout: 30_000 });
+    await expect(page.locator('body')).toContainText(/队列已全部标注完成/, { timeout: 30_000 });
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+});
