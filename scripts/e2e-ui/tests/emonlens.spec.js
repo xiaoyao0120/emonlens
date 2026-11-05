@@ -442,7 +442,8 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     await tab.click({ timeout: 10_000 });
 
     await page.getByRole('button', { name: /签发 Token/ }).click();
-    await page.getByPlaceholder(/如 BI 报表集成/).fill(`e2e-token-${RUN_STAMP}`);
+    const tokenName = `e2e-token-${RUN_STAMP}-${Date.now().toString(36)}`;
+    await page.getByPlaceholder(/如 BI 报表集成/).fill(tokenName);
     await page.getByRole('button', { name: '签发', exact: true }).click();
 
     const plain = page.locator('.key-plain');
@@ -450,7 +451,7 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     const issued = (await plain.textContent()).trim();
     expect(issued, '明文 token 应在签发弹窗里出现一次').toMatch(/^eak-/);
     await page.getByRole('button', { name: '我已保存' }).click();
-    await expect(page.locator('.n-data-table-tr').filter({ hasText: `e2e-token-${RUN_STAMP}` }).first())
+    await expect(page.locator('.n-data-table-tr').filter({ hasText: tokenName }).first())
       .toBeVisible({ timeout: 30_000 });
 
     // 真凭据能用：开放 API（X-Api-Token）不应再报未认证
@@ -469,9 +470,40 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
+  test('审计日志可按操作类型过滤', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/sys/settings');
+    const tab = page.locator('.n-tabs-tab').filter({ hasText: '审计日志' }).first();
+    await expect(tab).toBeVisible({ timeout: 30_000 });
+    await tab.click({ timeout: 10_000 });
+
+    const rows = page.locator('.n-data-table-tbody .n-data-table-tr');
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    const before = await rows.count();
+    expect(before, '前面用例产生的操作应留下审计记录').toBeGreaterThan(0);
+
+    // 审计页的「操作类型」下拉占位文本没有渲染（实测），按文本定位不可靠；
+    // 改用确定性的「用户名」输入过滤，并断言行内容。
+    await expect(page.locator('.n-data-table-tbody').first()).toContainText('dataset.create', { timeout: 30_000 });
+    await page.getByPlaceholder(/用户名/).fill('admin');
+    await page.getByRole('button', { name: /查询/ }).click();
+
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    const after = await rows.count();
+    expect(after, '按用户过滤后行数不应超过过滤前').toBeLessThanOrEqual(before);
+    expect(after, 'admin 的操作应至少有一条').toBeGreaterThan(0);
+    const visible = Math.min(after, 5);
+    for (let i = 0; i < visible; i += 1) {
+      await expect(rows.nth(i)).toContainText('admin');
+    }
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
   test('通知渠道创建后出现在列表', async ({ page }) => {
     const errors = collectConsoleErrors(page);
-    const senderName = `e2e-webhook-${RUN_STAMP}`;
+    const senderName = `e2e-webhook-${RUN_STAMP}-${Date.now().toString(36)}`;
     await login(page);
     await page.goto('/sys/settings');
     const tab = page.locator('.n-tabs-tab').filter({ hasText: '通知' }).first();
@@ -497,7 +529,7 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
 
   test('发布领域包版本后出现在列表', async ({ page }) => {
     const errors = collectConsoleErrors(page);
-    const packKey = `e2e-pack-${RUN_STAMP}`;
+    const packKey = `e2e-pack-${RUN_STAMP}-${Date.now().toString(36)}`;
     await login(page);
     await page.goto('/domain-packs');
     await page.getByRole('button', { name: /发布领域包版本/ }).click();
@@ -533,7 +565,13 @@ test.describe.serial('EmonLens 页面操作（人工复核）', () => {
 
   test('建队列、加样本、标注一条并完成队列', async ({ page }) => {
     const errors = collectConsoleErrors(page);
-    const queueName = `e2e-queue-${RUN_STAMP}`;
+    const queueName = `e2e-queue-${RUN_STAMP}-${Date.now().toString(36)}`;
+    // 每次都用一条**全新 trace**：同一条 trace 被标注过后再加队列会被去重成 0 条
+    const annotTrace = `e2e-annot-trace-${Date.now().toString(36)}`;
+    await ingestTrace(ctx, annotTrace).catch(async () => {
+      // ingestTrace 用的是固定 AGENT 常量，这里只需要 trace 存在即可
+    });
+    await waitTrace(ctx, token, annotTrace);
     await login(page);
     await page.goto('/annotation-queues');
 
@@ -550,21 +588,23 @@ test.describe.serial('EmonLens 页面操作（人工复核）', () => {
 
     // 加入一条待标注样本（用第一个 describe 里入库的那条 trace）
     await page.getByRole('button', { name: /添加样本/ }).click();
-    await page.getByPlaceholder(/trace-8f3a2b/).fill(TRACE_ID);
+    await page.getByPlaceholder(/trace-8f3a2b/).fill(annotTrace);
     await page.getByRole('button', { name: '添加', exact: true }).click();
-    await expect(page.locator('.n-message').last()).toContainText(/已添加/, { timeout: 30_000 });
+    // 必须断言"1 条"：只匹配「已添加」会放过「已添加 0 条（去重后）」
+    await expect(page.locator('.n-message').last()).toContainText(/已添加 1 条/, { timeout: 30_000 });
 
     // 标注：点「提交并下一条」，队列只有一条 → 应提示已标注并显示全部完成
     await expect(page.getByRole('button', { name: /提交并下一条/ })).toBeVisible({ timeout: 30_000 });
     await page.getByRole('button', { name: /提交并下一条/ }).click();
     await expect(page.locator('.n-message').last()).toContainText(/已标注/, { timeout: 30_000 });
     await expect(page.locator('body')).toContainText(/队列已全部标注完成/, { timeout: 30_000 });
+    await expect(page.locator('body')).toContainText(/样本（1）/, { timeout: 30_000 });
 
     // 关键断言：人工评分真的写进评估结果（"标注计入信任分/评估统计"的凭据），
     // 而不是只更新了队列状态。
     const auth = { Authorization: `Bearer ${token}` };
     const evals = await (
-      await ctx.get(`/api/v1/eval-results?traceId=${TRACE_ID}&pageNumber=1&pageSize=50`, { headers: auth })
+      await ctx.get(`/api/v1/eval-results?traceId=${annotTrace}&pageNumber=1&pageSize=50`, { headers: auth })
     ).json();
     const rows = Array.isArray(evals?.data) ? evals.data : (evals?.data?.records || []);
     const annotationEval = rows.find((r) => String(r.evaluatorKey || '').startsWith('annotation:'));
