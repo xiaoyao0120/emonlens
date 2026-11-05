@@ -469,6 +469,32 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
+  test('通知渠道创建后出现在列表', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const senderName = `e2e-webhook-${RUN_STAMP}`;
+    await login(page);
+    await page.goto('/sys/settings');
+    const tab = page.locator('.n-tabs-tab').filter({ hasText: '通知' }).first();
+    await expect(tab).toBeVisible({ timeout: 30_000 });
+    await tab.click({ timeout: 10_000 });
+
+    await page.getByRole('button', { name: /新建渠道/ }).click();
+    // 渠道类型：EMAIL / WEBHOOK，选 WEBHOOK 后配置样例会切换成 url+secret
+    await page.locator('.n-form-item').filter({ hasText: '渠道类型' }).locator('.n-base-selection').click();
+    await page.locator('.n-base-select-option:visible').filter({ hasText: 'WEBHOOK' }).first().click({ timeout: 10_000 });
+    await page.getByPlaceholder(/如 运维邮件组/).fill(senderName);
+    await page
+      .locator('.n-form-item')
+      .filter({ hasText: '配置（JSON）' })
+      .locator('textarea')
+      .fill(JSON.stringify({ url: 'https://hooks.example.com/e2e', secret: 'e2e-secret-key-0123456789abcdef', keyVersion: 'v1' }));
+    await page.getByRole('button', { name: '创建', exact: true }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/渠道已创建/, { timeout: 30_000 });
+    await expect(page.locator('.n-data-table-tr').filter({ hasText: senderName }).first())
+      .toBeVisible({ timeout: 30_000 });
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
   test('发布领域包版本后出现在列表', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     const packKey = `e2e-pack-${RUN_STAMP}`;
@@ -477,9 +503,8 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     await page.getByRole('button', { name: /发布领域包版本/ }).click();
     await page.getByPlaceholder('customer-support').fill(packKey);
     await page.getByPlaceholder('1.0.0').fill('1.0.0');
-    // 「名称」后端必填，但弹窗里既没有 required 标记也没有 placeholder：
-    // 按 label 定位那个输入框（这是实测发现的可用性小问题）
-    await page.locator('.n-form-item').filter({ hasText: '名称' }).first().locator('input').fill(`E2E 领域包 ${RUN_STAMP}`);
+    // 名称现在有 required 标记与 placeholder（本轮补的可用性修复）
+    await page.getByPlaceholder(/如 客服领域包/).fill(`E2E 领域包 ${RUN_STAMP}`);
     // manifest 已预填合法模板（domain-pack/v1），不额外改
     await page.getByRole('button', { name: '发布', exact: true }).click();
     await expect(page.locator('.n-message').last()).toContainText(/已发布/, { timeout: 30_000 });

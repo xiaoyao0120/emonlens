@@ -25,7 +25,7 @@
           <n-form-item label="packKey"><n-input v-model:value="form.packKey" placeholder="customer-support" /></n-form-item>
           <n-form-item label="version"><n-input v-model:value="form.version" placeholder="1.0.0" /></n-form-item>
         </div>
-        <n-form-item label="名称"><n-input v-model:value="form.name" /></n-form-item>
+        <n-form-item label="名称" required><n-input v-model:value="form.name" placeholder="如 客服领域包" /></n-form-item>
         <n-form-item label="说明"><n-input v-model:value="form.description" type="textarea" :rows="2" /></n-form-item>
         <n-form-item label="manifest（domain-pack/v1）">
           <n-input v-model:value="form.manifestText" type="textarea" :rows="14" class="mono" />
