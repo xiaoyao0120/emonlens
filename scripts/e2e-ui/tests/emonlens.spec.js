@@ -693,6 +693,29 @@ test.describe.serial('EmonLens 页面操作（人工复核）', () => {
     expect(Number(annotationEval.score), '页面默认评分 8 应落到评估结果').toBe(8);
     expect(annotationEval.label, '8 分应判 PASS').toBe('PASS');
 
+    // 再往下一环：人工评分应触发信任分重算，output 维度出现 eval_pass_rate 证据
+    // （此前标注不发 SCORE_CHANGED，快照会一直停在旧值——本轮已修）
+    let dims = null;
+    for (let i = 0; i < 60; i += 1) {
+      try {
+        const scoreResp = await (
+          await ctx.get(`/api/v1/score/agents/${AGENT}?window=24h`, { headers: auth })
+        ).json();
+        const raw = scoreResp?.data?.dimensions;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed?.output?.score != null) {
+            dims = parsed;
+            break;
+          }
+        }
+      } catch (e) { /* 快照还没生成，继续等 */ }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(dims, '标注后信任分应重算，且 output 维度带分数').toBeTruthy();
+    expect(dims.output.score, '人工 PASS 应体现在 output 维度分数').toBeGreaterThan(0);
+    expect(dims.output.basis, 'output 维度应基于 eval_pass_rate').toBe('eval_pass_rate');
+
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 });

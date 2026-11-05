@@ -50,6 +50,8 @@ public class AnnotationQueueController {
     private final AnnotationQueueItemMapper itemMapper;
     private final TraceSummaryMapper traceSummaryMapper;
     private final EvalResultMapper evalResultMapper;
+    private final io.emonlens.server.engine.event.EventService eventService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     @Data
     public static class CreateQueueRequest {
@@ -251,6 +253,20 @@ public class AnnotationQueueController {
             result.setJudgeModel("human");
             result.setCreatedAt(LocalDateTime.now());
             evalResultMapper.insert(result);
+            // 人工评分同样是该 agent 的评估证据：必须触发信任分重算，
+            // 否则快照会一直停在旧值（此前只有自动评估与 Finding 会发 SCORE_CHANGED）
+            Map<String, Object> fields = new java.util.LinkedHashMap<>();
+            fields.put("traceId", item.getTraceId());
+            fields.put("agentKey", summary.getAgentKey());
+            fields.put("source", "annotation");
+            String scorePayload;
+            try {
+                scorePayload = objectMapper.writeValueAsString(fields);
+            } catch (Exception e) {
+                scorePayload = "{}";
+            }
+            eventService.enqueue(io.emonlens.server.engine.event.EventType.SCORE_CHANGED, summary.getWorkspaceId(),
+                    summary.getAgentKey(), scorePayload);
         }
         return ApiResult.ok(item);
     }
