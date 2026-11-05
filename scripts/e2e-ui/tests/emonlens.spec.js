@@ -417,3 +417,74 @@ test.describe.serial('EmonLens 页面操作（模型链路）', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 });
+// ---------------------------------------------------------------------------
+// 系统设置里的"签发的凭据真的能用"与"资产发布"链路。
+// 不需要模型：验证 UI 表单结果能被 API 使用，以及发布类表单落到列表。
+// ---------------------------------------------------------------------------
+
+test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
+  let ctx;
+
+  test.beforeAll(async ({ baseURL }) => {
+    ctx = await request.newContext({ baseURL });
+  });
+
+  test.afterAll(async () => {
+    await ctx?.dispose();
+  });
+
+  test('签发的 OpenAPI Token 能真实调用开放接口', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/sys/settings');
+    const tab = page.locator('.n-tabs-tab').filter({ hasText: 'API Token' }).first();
+    await expect(tab).toBeVisible({ timeout: 30_000 });
+    await tab.click({ timeout: 10_000 });
+
+    await page.getByRole('button', { name: /签发 Token/ }).click();
+    await page.getByPlaceholder(/如 BI 报表集成/).fill(`e2e-token-${RUN_STAMP}`);
+    await page.getByRole('button', { name: '签发', exact: true }).click();
+
+    const plain = page.locator('.key-plain');
+    await expect(plain).toBeVisible({ timeout: 30_000 });
+    const issued = (await plain.textContent()).trim();
+    expect(issued, '明文 token 应在签发弹窗里出现一次').toMatch(/^eak-/);
+    await page.getByRole('button', { name: '我已保存' }).click();
+    await expect(page.locator('.n-data-table-tr').filter({ hasText: `e2e-token-${RUN_STAMP}` }).first())
+      .toBeVisible({ timeout: 30_000 });
+
+    // 真凭据能用：开放 API（X-Api-Token）不应再报未认证
+    const good = await ctx.get(`/api/v1/open/score/agents/${AGENT}`, {
+      headers: { 'X-Api-Token': issued },
+    });
+    const goodBody = await good.json();
+    expect(goodBody.code, `开放接口应接受该 token: ${JSON.stringify(goodBody)}`).not.toBe(40101);
+
+    // 假 token 必须被拒（证明上面不是"接口对谁都放行"）
+    const bad = await ctx.get(`/api/v1/open/score/agents/${AGENT}`, {
+      headers: { 'X-Api-Token': 'eak-definitely-wrong' },
+    });
+    expect((await bad.json()).code, '错误 token 必须 40101').toBe(40101);
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('发布领域包版本后出现在列表', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const packKey = `e2e-pack-${RUN_STAMP}`;
+    await login(page);
+    await page.goto('/domain-packs');
+    await page.getByRole('button', { name: /发布领域包版本/ }).click();
+    await page.getByPlaceholder('customer-support').fill(packKey);
+    await page.getByPlaceholder('1.0.0').fill('1.0.0');
+    // 「名称」后端必填，但弹窗里既没有 required 标记也没有 placeholder：
+    // 按 label 定位那个输入框（这是实测发现的可用性小问题）
+    await page.locator('.n-form-item').filter({ hasText: '名称' }).first().locator('input').fill(`E2E 领域包 ${RUN_STAMP}`);
+    // manifest 已预填合法模板（domain-pack/v1），不额外改
+    await page.getByRole('button', { name: '发布', exact: true }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已发布/, { timeout: 30_000 });
+    await expect(page.locator('.n-data-table-tr').filter({ hasText: packKey }).first())
+      .toBeVisible({ timeout: 30_000 });
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+});
