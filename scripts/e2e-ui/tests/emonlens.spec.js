@@ -519,6 +519,18 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
 // ---------------------------------------------------------------------------
 
 test.describe.serial('EmonLens 页面操作（人工复核）', () => {
+  let ctx;
+  let token;
+
+  test.beforeAll(async ({ baseURL }) => {
+    ctx = await request.newContext({ baseURL });
+    token = await apiLogin(ctx);
+  });
+
+  test.afterAll(async () => {
+    await ctx?.dispose();
+  });
+
   test('建队列、加样本、标注一条并完成队列', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     const queueName = `e2e-queue-${RUN_STAMP}`;
@@ -547,6 +559,18 @@ test.describe.serial('EmonLens 页面操作（人工复核）', () => {
     await page.getByRole('button', { name: /提交并下一条/ }).click();
     await expect(page.locator('.n-message').last()).toContainText(/已标注/, { timeout: 30_000 });
     await expect(page.locator('body')).toContainText(/队列已全部标注完成/, { timeout: 30_000 });
+
+    // 关键断言：人工评分真的写进评估结果（"标注计入信任分/评估统计"的凭据），
+    // 而不是只更新了队列状态。
+    const auth = { Authorization: `Bearer ${token}` };
+    const evals = await (
+      await ctx.get(`/api/v1/eval-results?traceId=${TRACE_ID}&pageNumber=1&pageSize=50`, { headers: auth })
+    ).json();
+    const rows = Array.isArray(evals?.data) ? evals.data : (evals?.data?.records || []);
+    const annotationEval = rows.find((r) => String(r.evaluatorKey || '').startsWith('annotation:'));
+    expect(annotationEval, `标注应产生 annotation: 前缀的评估结果: ${JSON.stringify(rows)}`).toBeTruthy();
+    expect(Number(annotationEval.score), '页面默认评分 8 应落到评估结果').toBe(8);
+    expect(annotationEval.label, '8 分应判 PASS').toBe('PASS');
 
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
