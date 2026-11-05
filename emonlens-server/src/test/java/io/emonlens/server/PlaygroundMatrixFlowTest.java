@@ -138,6 +138,21 @@ class PlaygroundMatrixFlowTest extends AbstractIntegrationTest {
         return column;
     }
 
+    /**
+     * 终态矩阵的不变式：没有格子还停在 PENDING，且 完成+失败 == 格数。
+     * 这条守卫能抓住"矩阵标 COMPLETED 却少一格"的回归（并发计数丢失 update 或 worker 异常被吞）。
+     */
+    private void assertTerminalCellsConsistent(JsonNode matrix) {
+        assertThat(matrix.path("status").asText()).isIn("COMPLETED", "PARTIAL");
+        for (JsonNode cell : matrix.path("cells")) {
+            assertThat(cell.path("status").asText())
+                    .as("终态矩阵不得留下 PENDING 格: %s", cell).isNotEqualTo("PENDING");
+        }
+        assertThat(matrix.path("completedCells").asInt() + matrix.path("failedCells").asInt())
+                .as("完成+失败应等于格数: %s", matrix)
+                .isEqualTo(matrix.path("cells").size());
+    }
+
     private JsonNode awaitMatrix(String matrixId) throws Exception {
         return await(() -> {
             try {
@@ -213,6 +228,7 @@ class PlaygroundMatrixFlowTest extends AbstractIntegrationTest {
         assertThat(matrix.path("completedCells").asInt()).isEqualTo(4);
         assertThat(matrix.path("failedCells").asInt()).isZero();
         assertThat(matrix.path("cells")).hasSize(4);
+        assertTerminalCellsConsistent(matrix);
         JsonNode firstCell = matrix.path("cells").get(0);
         assertThat(firstCell.path("output").asText()).isNotBlank();
         assertThat(firstCell.path("aggregateLabel").asText()).isNotBlank();
@@ -252,8 +268,11 @@ class PlaygroundMatrixFlowTest extends AbstractIntegrationTest {
             String matrixId = created.path("data").path("id").asText();
             JsonNode matrix = awaitMatrix(matrixId);
             assertThat(matrix.path("status").asText()).isEqualTo("PARTIAL");
-            assertThat(matrix.path("completedCells").asInt()).isEqualTo(2);
+            // 语义收紧：completedCells = 成功格数（不含失败），failedCells = 失败格数。
+            // 旧实现 completed 计的是"已尝试"，与 failed 重叠（2 格却算出 completed=2 + failed=1）。
+            assertThat(matrix.path("completedCells").asInt()).isEqualTo(1);
             assertThat(matrix.path("failedCells").asInt()).isEqualTo(1);
+            assertTerminalCellsConsistent(matrix);
             boolean healthyCellOk = false;
             boolean brokenCellError = false;
             for (JsonNode cell : matrix.path("cells")) {

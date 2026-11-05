@@ -503,12 +503,27 @@ public class PlaygroundMatrixService {
         List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
         for (PlaygroundCellEntity cell : cells) {
             futures.add(pool.submit(() -> {
-                boolean ok = executeCell(matrix, cell, columnByKey.get(cell.getColumnKey()), evaluators);
-                done.incrementAndGet();
-                if (!ok) {
-                    failed.incrementAndGet();
+                boolean ok = false;
+                try {
+                    ok = executeCell(matrix, cell, columnByKey.get(cell.getColumnKey()), evaluators);
+                } catch (Exception e) {
+                    // 单格异常必须兜住：以前异常会直接从 worker 抛出，done 不自增、failed 不计数，
+                    // 结果矩阵被标成 COMPLETED 却少一格（completedCells 少 1、failedCells=0），
+                    // 用户看到"跑完了"但有一格永远停在 PENDING。
+                    ok = false;
+                    try {
+                        markCellError(cell, "CELL_EXECUTION_FAILED",
+                                e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+                    } catch (Exception ignored) {
+                        log.warn("mark cell error failed, cell={}", cell.getId(), ignored);
+                    }
+                } finally {
+                    done.incrementAndGet();
+                    if (!ok) {
+                        failed.incrementAndGet();
+                    }
+                    touchProgress(matrix.getId(), done.get(), failed.get());
                 }
-                touchProgress(matrix.getId(), done.get(), failed.get());
             }));
         }
         pool.shutdown();
@@ -648,6 +663,21 @@ public class PlaygroundMatrixService {
 
     private void finish(PlaygroundMatrixEntity matrix, boolean partial) {
         List<PlaygroundCellEntity> cells = cellsOf(matrix.getId());
+        // 以真实单元格状态为准推导计数与终态：并发下计数器可能漏计（异常路径），
+        // 而"还有格子不是 OK/ERROR"就说明没跑完，不能报 COMPLETED
+        int okCells = 0;
+        int errorCells = 0;
+        int pendingCells = 0;
+        for (PlaygroundCellEntity cell : cells) {
+            if (PlaygroundCellEntity.STATUS_OK.equals(cell.getStatus())) {
+                okCells++;
+            } else if (PlaygroundCellEntity.STATUS_ERROR.equals(cell.getStatus())) {
+                errorCells++;
+            } else {
+                pendingCells++;
+            }
+        }
+        partial = partial || errorCells > 0 || pendingCells > 0;
         long promptTokens = 0;
         long completionTokens = 0;
         BigDecimal cost = BigDecimal.ZERO;
@@ -674,6 +704,8 @@ public class PlaygroundMatrixService {
                 .set(PlaygroundMatrixEntity::getCurrency, currency)
                 .set(PlaygroundMatrixEntity::getUnpricedModels,
                         unpriced.isEmpty() ? null : String.join(",", unpriced))
+                .set(PlaygroundMatrixEntity::getCompletedCells, okCells)
+                .set(PlaygroundMatrixEntity::getFailedCells, errorCells)
                 .set(PlaygroundMatrixEntity::getFinishedAt, LocalDateTime.now()));
     }
 
