@@ -464,7 +464,8 @@ public class EvaluationRunService {
      * <ul>
      *   <li>MAJORITY（默认）：严格多数（&gt; n/2）才算结论，否则 UNKNOWN——冲突不硬判</li>
      *   <li>CONSERVATIVE：全体一致才给结论，否则 UNKNOWN</li>
-     *   <li>MEAN：取均分并与 minScore 比；若标签本身分歧则 UNKNOWN（分数仍保留供排查）</li>
+     *   <li>MEAN：均分 + 同向保护。必须有严格多数（&gt; n/2）同向，<b>且</b>判 PASS 时均分达到 minScore；
+     *       任一不满足即 UNKNOWN（JUDGE_DISAGREEMENT / JUDGE_MEAN_BELOW_MIN_SCORE），分数仍保留供排查</li>
      * </ul>
      * 每个 model 的原始输出都写进 judgeRecordsJson，便于回溯"为什么判成这样"。
      */
@@ -535,12 +536,26 @@ public class EvaluationRunService {
             label = EvaluatorEntity.LABEL_EVAL_UNAVAILABLE;
             reasonCode = "INVALID_JUDGE_OUTPUT";
         } else if ("MEAN".equals(policy)) {
-            if (pass > 0 && fail > 0) {
+            // 均分 + 同向保护：
+            //   1) 必须有严格多数同向（> n/2），否则分歧不硬判 → UNKNOWN
+            //   2) 判 PASS 时，均分还必须达到 minScore，避免"多数通过但均值其实没过线"
+            // 于是 1 PASS + 1 FAIL 仍是 UNKNOWN；2 PASS + 1 FAIL 且均分达标才给 PASS。
+            // 均分始终保留在 score 里，便于回溯"为什么判成这样"。
+            if (pass * 2 > labels.size()) {
+                BigDecimal mean = result.getScore();
+                if (mean == null || mean.doubleValue() >= minScore) {
+                    label = EvaluatorEntity.LABEL_PASS;
+                    reasonCode = "JUDGE_PASS";
+                } else {
+                    label = EvaluatorEntity.LABEL_UNKNOWN;
+                    reasonCode = "JUDGE_MEAN_BELOW_MIN_SCORE";
+                }
+            } else if (fail * 2 > labels.size()) {
+                label = EvaluatorEntity.LABEL_FAIL;
+                reasonCode = "JUDGE_FAIL";
+            } else {
                 label = EvaluatorEntity.LABEL_UNKNOWN;
                 reasonCode = "JUDGE_DISAGREEMENT";
-            } else {
-                label = pass > 0 ? EvaluatorEntity.LABEL_PASS : EvaluatorEntity.LABEL_FAIL;
-                reasonCode = pass > 0 ? "JUDGE_PASS" : "JUDGE_FAIL";
             }
         } else if ("CONSERVATIVE".equals(policy)) {
             if (pass == labels.size()) {
@@ -1404,12 +1419,26 @@ public class EvaluationRunService {
             label = EvaluatorEntity.LABEL_EVAL_UNAVAILABLE;
             reasonCode = RC_INVALID_JUDGE_OUTPUT;
         } else if ("MEAN".equals(policy)) {
-            if (pass > 0 && fail > 0) {
+            // 均分 + 同向保护：
+            //   1) 必须有严格多数同向（> n/2），否则分歧不硬判 → UNKNOWN
+            //   2) 判 PASS 时，均分还必须达到 minScore，避免"多数通过但均值其实没过线"
+            // 于是 1 PASS + 1 FAIL 仍是 UNKNOWN；2 PASS + 1 FAIL 且均分达标才给 PASS。
+            // 均分始终保留在 score 里，便于回溯"为什么判成这样"。
+            if (pass * 2 > labels.size()) {
+                BigDecimal mean = result.getScore();
+                if (mean == null || mean.doubleValue() >= minScore) {
+                    label = EvaluatorEntity.LABEL_PASS;
+                    reasonCode = "JUDGE_PASS";
+                } else {
+                    label = EvaluatorEntity.LABEL_UNKNOWN;
+                    reasonCode = "JUDGE_MEAN_BELOW_MIN_SCORE";
+                }
+            } else if (fail * 2 > labels.size()) {
+                label = EvaluatorEntity.LABEL_FAIL;
+                reasonCode = "JUDGE_FAIL";
+            } else {
                 label = EvaluatorEntity.LABEL_UNKNOWN;
                 reasonCode = "JUDGE_DISAGREEMENT";
-            } else {
-                label = pass > 0 ? EvaluatorEntity.LABEL_PASS : EvaluatorEntity.LABEL_FAIL;
-                reasonCode = pass > 0 ? "JUDGE_PASS" : "JUDGE_FAIL";
             }
         } else if ("CONSERVATIVE".equals(policy)) {
             if (pass == labels.size()) {

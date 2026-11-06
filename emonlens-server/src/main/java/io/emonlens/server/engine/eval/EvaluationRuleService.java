@@ -670,7 +670,7 @@ public class EvaluationRuleService {
         String value = scope.trim().toUpperCase();
         if (!List.of(EvalRuleEntity.SCOPE_TRACE, EvalRuleEntity.SCOPE_SESSION).contains(value)) {
             throw new EmonLensException(ErrorCode.BAD_REQUEST,
-                    "scope 只支持 TRACE / SESSION（SPAN 口径复用 TRACE 的正文评估）");
+                    "scope 只支持 TRACE / SESSION");
         }
         return value;
     }

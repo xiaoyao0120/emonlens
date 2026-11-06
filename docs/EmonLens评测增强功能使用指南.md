@@ -1184,7 +1184,8 @@ curl -s -X POST "$HOST/api/v1/eval-rules/rewinds/$JOB/cancel" -H "Authorization:
 
 ### 15.6 已知边界（后续迭代）
 
-- `SPAN` scope 目前复用 TRACE 的正文口径（独立 span 采样需要 span→content 映射先落地）。
+- `SPAN` scope **不支持**：`scope` 只接受 `TRACE` / `SESSION`，传其它值会返回 400。
+  需要 span 级证据时，目前通过 Trace 正文（span 拼接）采集，规则仍按 TRACE 粒度出结论。
 - Evaluation Monitor 的阈值判定仍是「按 agentKey + evaluatorKey 的最近 N 条」，分母尚未随 scope 调整。
 
 ---
@@ -1600,7 +1601,7 @@ emonlens:
 | --- | --- | --- |
 | `MAJORITY`（默认） | 严格多数（> n/2） | 平票 → **UNKNOWN**（`JUDGE_DISAGREEMENT`） |
 | `CONSERVATIVE` | 全体一致 | 任何分歧 → UNKNOWN |
-| `MEAN` | 标签一致时按均分过阈值 | 标签分歧 → UNKNOWN（均分保留供排查） |
+| `MEAN` | 严格多数同向 **且** 均分 ≥ `minScore` | 无多数 → UNKNOWN（`JUDGE_DISAGREEMENT`）；多数但均分不够 → UNKNOWN（`JUDGE_MEAN_BELOW_MIN_SCORE`） |
 
 留痕：任务账本的 `judgeRecords` 里每个 model 一条 `{model, label, score, raw, reason}`，
 `judgeModel` 记为 `"a,b"`，judge 调用数按模型数计——成本与"到底几个模型判过"都能对上。
@@ -1608,7 +1609,8 @@ emonlens:
 ### 21.4 已知边界
 
 - 校准 few-shot 不是原文片段（见 21.2）。
-- MEAN 不做"分数硬切"：标签分歧就是 UNKNOWN，避免用均分掩盖分歧。
+- `MEAN` 不做"分数硬切"：既要求严格多数同向、又要求均分过线，两条任一不满足都判 UNKNOWN，
+  避免用均分掩盖分歧。均分始终写进 `score`，便于回溯"差在哪一边"。
 
 ---
 

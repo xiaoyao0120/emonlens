@@ -220,4 +220,54 @@ class JudgeUpgradeFlowTest extends AbstractIntegrationTest {
         assertThat(conservativeRun.path("unknownCount").asInt()).isEqualTo(1);
         assertThat(itemOf(datasetId, runId).path("passCount").asInt()).isEqualTo(1);
     }
+
+    /**
+     * MEAN = 均分 + 同向保护：
+     *   ① 没有严格多数同向 → UNKNOWN（1 PASS + 1 FAIL 不硬判）
+     *   ② 多数同向且均分达到 minScore → 给结论（2 PASS + 1 FAIL，均分 7.0 >= 6 → PASS）
+     *   ③ 多数同向但均分未达 minScore → 仍 UNKNOWN，reasonCode 说明是均值不过线
+     * 这三种情形把 MEAN 与 MAJORITY（只看票数）和"纯均分硬切"区分开了。
+     */
+    @Test
+    void meanAggregationNeedsBothMajorityAndMeanAboveMinScore() throws Exception {
+        String datasetId = createDataset("judge-mean");
+        ingestTrace("judge-mean-t1", "refund accepted, arrives in 3 business days");
+        readTree(postApi("/api/v1/datasets/" + datasetId + "/items", Map.of("traceId", "judge-mean-t1")));
+
+        // ① 1 PASS(9) + 1 FAIL(3)：没有严格多数 → UNKNOWN
+        String split = createJudgeEvaluator("judge-mean-split", Map.of(
+                "judgeModels", List.of("judge-lenient", "judge-strict"),
+                "judgeAggregation", "MEAN"));
+        JsonNode splitRun = itemOf(datasetId, runTrace(datasetId, split, "judge-mean-1"));
+        assertThat(splitRun.path("unknownCount").asInt())
+                .as("split verdict must stay UNKNOWN: %s", splitRun).isEqualTo(1);
+        assertThat(splitRun.path("passCount").asInt()).isZero();
+        assertThat(splitRun.path("failCount").asInt()).isZero();
+
+        // ② 2 PASS(9,9) + 1 FAIL(3)：多数同向，均分 7.0 >= 6 → PASS
+        String majority = createJudgeEvaluator("judge-mean-majority", Map.of(
+                "judgeModels", List.of("judge-lenient", "judge-lenient-b", "judge-strict"),
+                "judgeAggregation", "MEAN"));
+        JsonNode majorityRun = itemOf(datasetId, runTrace(datasetId, majority, "judge-mean-2"));
+        assertThat(majorityRun.path("passCount").asInt())
+                .as("majority + mean>=minScore must PASS: %s", majorityRun).isEqualTo(1);
+        assertThat(majorityRun.path("unknownCount").asInt()).isZero();
+
+        // ③ 同样的票型，但 minScore 提到 8：均分 7.0 < 8 → UNKNOWN（不做分数硬切）
+        String belowMean = createJudgeEvaluator("judge-mean-below", Map.of(
+                "judgeModels", List.of("judge-lenient", "judge-lenient-b", "judge-strict"),
+                "judgeAggregation", "MEAN",
+                "minScore", 8));
+        String belowRunId = runTrace(datasetId, belowMean, "judge-mean-3");
+        JsonNode belowRun = itemOf(datasetId, belowRunId);
+        assertThat(belowRun.path("unknownCount").asInt())
+                .as("majority but mean<minScore must be UNKNOWN: %s", belowRun).isEqualTo(1);
+        assertThat(belowRun.path("passCount").asInt()).isZero();
+        String details = datasetRunItemMapper.selectList(
+                        com.baomidou.mybatisplus.core.toolkit.Wrappers
+                                .<io.emonlens.server.storage.entity.DatasetRunItemEntity>lambdaQuery()
+                                .eq(io.emonlens.server.storage.entity.DatasetRunItemEntity::getRunId, belowRunId))
+                .get(0).getResultDetailsJson();
+        assertThat(details).contains("JUDGE_MEAN_BELOW_MIN_SCORE");
+    }
 }

@@ -359,4 +359,24 @@ class EvaluationRuleFlowTest extends AbstractIntegrationTest {
         JsonNode enabled = readTree(postApi("/api/v1/eval-rules/toggle-rule/enable", Map.of()));
         assertThat(enabled.path("data").path("enabled").asBoolean()).isTrue();
     }
+
+    // ---------- 7. scope 契约 ----------
+
+    /**
+     * scope 只接受 TRACE / SESSION。SPAN 曾经有常量但没有任何实现，属于"看起来支持、实际不可达"的
+     * 误导性契约——现已移除常量，并由本用例锁定"只支持两种 scope"的行为。
+     */
+    @Test
+    void spanScopeIsRejectedBecauseOnlyTraceAndSessionAreImplemented() throws Exception {
+        JsonNode span = upsertRule("scope-span", Map.of(
+                "scope", "SPAN",
+                "evaluatorIds", java.util.List.of(evaluator("scope-span-ev", "true"))));
+        assertThat(span.path("code").asInt()).as("SPAN must be rejected: %s", span).isNotZero();
+        assertThat(span.path("message").asText()).contains("TRACE").contains("SESSION");
+
+        JsonNode bogus = upsertRule("scope-bogus", Map.of(
+                "scope", "GROUP",
+                "evaluatorIds", java.util.List.of(evaluator("scope-bogus-ev", "true"))));
+        assertThat(bogus.path("code").asInt()).as("unknown scope must be rejected: %s", bogus).isNotZero();
+    }
 }

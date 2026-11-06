@@ -20,7 +20,6 @@ import lombok.Data;
 public class EvalRuleEntity {
 
     public static final String SCOPE_TRACE = "TRACE";
-    public static final String SCOPE_SPAN = "SPAN";
     public static final String SCOPE_SESSION = "SESSION";
 
     @TableId(type = IdType.ASSIGN_UUID)
