@@ -269,5 +269,8 @@ class JudgeUpgradeFlowTest extends AbstractIntegrationTest {
                                 .eq(io.emonlens.server.storage.entity.DatasetRunItemEntity::getRunId, belowRunId))
                 .get(0).getResultDetailsJson();
         assertThat(details).contains("JUDGE_MEAN_BELOW_MIN_SCORE");
+        // reason 必须自带人话解释：界面只展示 reason（reasonCode 不落库），
+        // 没有这句用户只看到 UNKNOWN 完全不知道为什么。
+        assertThat(details).contains("未达阈值");
     }
 }

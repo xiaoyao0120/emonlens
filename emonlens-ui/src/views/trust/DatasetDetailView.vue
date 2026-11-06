@@ -1464,7 +1464,12 @@ const runItemColumns = computed(() => {
         h('span', {}, [
           h('span', {}, r.reason || '—'),
           r.resultDetails?.reasonCode
-            ? h('span', { class: 'mono', style: 'color:var(--text-muted);font-size:11px;margin-left:6px' }, r.resultDetails.reasonCode)
+            ? h('span', {
+                class: 'mono',
+                style: 'color:var(--text-muted);font-size:11px;margin-left:6px',
+                // 机器码放 tooltip，正文给人看得懂的原因；未收录的 code 会原样返回
+                title: r.resultDetails.reasonCode
+              }, enumText('evalReason', r.resultDetails.reasonCode))
             : null
         ]) },
     { title: '调用/用量', key: 'usage', width: 150, render: (r) => h('span', { style: 'font-size:11.5px;color:var(--text-secondary)' }, itemUsageText(r.resultDetails)) }
@@ -1504,7 +1509,11 @@ const taskColumns = [
       h('span', {}, [
         h('span', {}, r.reason || '—'),
         r.reasonCode
-          ? h('span', { class: 'mono', style: 'color:var(--text-muted);font-size:11px;margin-left:6px' }, r.reasonCode)
+          ? h('span', {
+              class: 'mono',
+              style: 'color:var(--text-muted);font-size:11px;margin-left:6px',
+              title: r.reasonCode
+            }, enumText('evalReason', r.reasonCode))
           : null
       ]) },
   { title: '证据', key: 'evidenceHash', width: 90, render: (r) => r.evidenceHash
@@ -2988,7 +2997,11 @@ function cellOf(it) {
     ' ',
     h('span', { class: 'num' }, it.score == null ? '' : String(it.score)),
     it.resultDetails?.reasonCode
-      ? h('span', { class: 'mono', style: 'color:var(--text-muted);font-size:11px;margin-left:6px' }, it.resultDetails.reasonCode)
+      ? h('span', {
+          class: 'mono',
+          style: 'color:var(--text-muted);font-size:11px;margin-left:6px',
+          title: it.resultDetails.reasonCode
+        }, enumText('evalReason', it.resultDetails.reasonCode))
       : null
   ])
 }

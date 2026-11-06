@@ -404,6 +404,80 @@ test.describe.serial('EmonLens 页面操作（模型链路）', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
+  test('多 judge 平均分未达阈值时，结果里给出可读原因', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const auth = { Authorization: `Bearer ${token}` };
+    const stamp = Date.now().toString(36);
+    const judgeTrace = `ui-e2e-judge-trace-${stamp}`;
+    await ingestTrace(ctx, judgeTrace);
+    await waitTrace(ctx, token, judgeTrace);
+
+    const ds = await (
+      await ctx.post('/api/v1/datasets', { headers: auth, data: { datasetKey: `ui-e2e-judgeds-${stamp}` } })
+    ).json();
+    expect(ds.code, JSON.stringify(ds)).toBe(0);
+    const datasetId = ds.data.id;
+    const item = await (
+      await ctx.post(`/api/v1/datasets/${datasetId}/items`, {
+        headers: auth,
+        data: { traceId: judgeTrace, input: '请帮我查订单', expectedOutput: '已发货' },
+      })
+    ).json();
+    expect(item.code, JSON.stringify(item)).toBe(0);
+
+    // 3 个 judge：2 个给 9 分（PASS），1 个给 3 分（FAIL）→ 多数同向，但均分 7.0 < minScore 8
+    const ev = await (
+      await ctx.post('/api/v1/evaluators', {
+        headers: auth,
+        data: {
+          evaluatorKey: `ui-e2e-judge-${stamp}`,
+          type: 'LLM_JUDGE',
+          spec: {
+            type: 'LLM_JUDGE',
+            judgeMode: 'HOLISTIC',
+            rubric: '回复需说明退款进度',
+            criteria: [],
+            minScore: 8,
+            judgeModels: ['judge-a', 'judge-b', 'judge-strict'],
+            judgeAggregation: 'MEAN',
+          },
+        },
+      })
+    ).json();
+    expect(ev.code, JSON.stringify(ev)).toBe(0);
+
+    const run = await (
+      await ctx.post(`/api/v1/datasets/${datasetId}/runs/async`, {
+        headers: { ...auth, 'Idempotency-Key': `ui-e2e-judge-run-${stamp}` },
+        data: { evaluatorIds: [ev.data.id], mode: 'TRACE' },
+      })
+    ).json();
+    expect(run.code, JSON.stringify(run)).toBe(0);
+    // 异步跑批返回的是 data.runId（不是 data.id），拿错字段会让轮询永远读到空状态
+    const runId = run.data.runId || run.data.id;
+
+    let status = '';
+    for (let i = 0; i < 60; i += 1) {
+      const list = await (await ctx.get(`/api/v1/datasets/${datasetId}/runs`, { headers: auth })).json();
+      const rows = Array.isArray(list?.data) ? list.data : (list?.data?.records || []);
+      status = rows.find((r) => r.id === runId)?.status || '';
+      if (['COMPLETED', 'PARTIAL_FAILED', 'FAILED'].includes(status)) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    expect(['COMPLETED', 'PARTIAL_FAILED'], `run status=${status}`).toContain(status);
+
+    // 页面：run 结果的原因列必须是人话，而不是只给一个 UNKNOWN
+    await login(page);
+    await page.goto(`/datasets/${datasetId}`);
+    const runsTab = page.locator('.n-tabs-tab').filter({ hasText: '实验与结果' }).first();
+    await expect(runsTab).toBeVisible({ timeout: 30_000 });
+    await runsTab.click({ timeout: 10_000 });
+    await page.getByRole('button', { name: '结果', exact: true }).first().click({ timeout: 15_000 });
+    await expect(page.locator('body')).toContainText(/未达阈值/, { timeout: 30_000 });
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
   test('试跑页真正调用端点并渲染输出', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     await login(page);

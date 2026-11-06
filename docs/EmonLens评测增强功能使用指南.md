@@ -1606,6 +1606,10 @@ emonlens:
 留痕：任务账本的 `judgeRecords` 里每个 model 一条 `{model, label, score, raw, reason}`，
 `judgeModel` 记为 `"a,b"`，judge 调用数按模型数计——成本与"到底几个模型判过"都能对上。
 
+**结果怎么读**：每条评估结果的 `reason` 都自带结论来源，例如
+`judge-a=PASS(9.0); judge-b=PASS(9.0); judge-strict=FAIL(3.0) => UNKNOWN by MEAN，多数 judge 判通过但平均分 7.00 未达阈值 8`。
+界面上的原因码（如 `JUDGE_MEAN_BELOW_MIN_SCORE`）已翻成中文说明、原始码放在悬浮提示里，排查时两者都能拿到。
+
 ### 21.4 已知边界
 
 - 校准 few-shot 不是原文片段（见 21.2）。

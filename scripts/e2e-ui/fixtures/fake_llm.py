@@ -1,7 +1,11 @@
 """E2E 用的假 LLM 端点（OpenAI 兼容）。
 
 用途：让"系统设置里配置端点 → 试跑页真正调用 → 输出渲染"这条链路可以在本地跑通，
-不需要真实模型与密钥。所有回复都在正文里带 fake-llm-ok 前缀，便于页面断言。
+不需要真实模型与密钥。所有普通模型的回复都在正文里带 fake-llm-ok 前缀，便于页面断言。
+
+judge 模型（名字以 judge- 开头）额外支持：返回可解析的判定 JSON，让"多 judge 聚合"
+这条链路也能在页面层验证。`judge-strict*` 给低分（3.0），其它 judge-* 给高分（9.0），
+于是 2 PASS + 1 FAIL 且均分 7.0 可以被构造出来（配合 minScore=8 触发"均值未达阈值"）。
 
 运行（与 E2E 应用同网络）：
   docker run -d --name fake-llm --network emonlens-uie2e \
@@ -9,6 +13,8 @@
 """
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+NORMAL_REPLY = "fake-llm-ok: 这是假端点的回复（用于页面 E2E）"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -21,10 +27,18 @@ class Handler(BaseHTTPRequestHandler):
             body = {}
 
         if self.path.rstrip("/").endswith("/chat/completions"):
-            content = "fake-llm-ok: 这是假端点的回复（用于页面 E2E）"
+            model = str(body.get("model") or "")
+            if model.startswith("judge-"):
+                score = 3.0 if "strict" in model else 9.0
+                content = json.dumps(
+                    {"score": score, "confidence": 0.8, "reason": "fake judge: " + model},
+                    ensure_ascii=False,
+                )
+            else:
+                content = NORMAL_REPLY
             payload = {
                 "id": "chatcmpl-fake",
-                "model": body.get("model", "fake-model"),
+                "model": model or "fake-model",
                 "choices": [{"message": {"role": "assistant", "content": content}}],
                 "usage": {"prompt_tokens": 11, "completion_tokens": 7},
             }

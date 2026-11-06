@@ -582,8 +582,21 @@ public class EvaluationRunService {
         }
         result.setLabel(label);
         result.setReasonCode(reasonCode);
+        // 把"为什么是这个结论"写进 reason。reasonCode 不落库、界面只展示 reason，
+        // 少了这句用户看到 UNKNOWN 完全不知道为什么（MEAN 尤其明显：票数够了但均分没过线）。
+        String verdictNote = "";
+        if ("JUDGE_MEAN_BELOW_MIN_SCORE".equals(reasonCode)) {
+            BigDecimal mean = result.getScore();
+            verdictNote = "，多数 judge 判通过但平均分 "
+                    + (mean == null ? "—" : mean.toPlainString())
+                    + " 未达阈值 "
+                    + new java.math.BigDecimal(String.valueOf(minScore)).stripTrailingZeros().toPlainString();
+        } else if ("JUDGE_DISAGREEMENT".equals(reasonCode)) {
+            verdictNote = "，" + pass + " 票 PASS / " + fail + " 票 FAIL 未达 " + policy
+                    + " 策略要求（不硬判）";
+        }
         result.setReason(clipReason(String.join("; ", summaryParts) + " => " + label
-                + " by " + policy));
+                + " by " + policy + verdictNote));
         return result;
     }
 
@@ -1465,8 +1478,21 @@ public class EvaluationRunService {
         }
         result.setLabel(label);
         result.setReasonCode(reasonCode);
+        // 把"为什么是这个结论"写进 reason。reasonCode 不落库、界面只展示 reason，
+        // 少了这句用户看到 UNKNOWN 完全不知道为什么（MEAN 尤其明显：票数够了但均分没过线）。
+        String verdictNote = "";
+        if ("JUDGE_MEAN_BELOW_MIN_SCORE".equals(reasonCode)) {
+            BigDecimal mean = result.getScore();
+            verdictNote = "，多数 judge 判通过但平均分 "
+                    + (mean == null ? "—" : mean.toPlainString())
+                    + " 未达阈值 "
+                    + new java.math.BigDecimal(String.valueOf(minScore)).stripTrailingZeros().toPlainString();
+        } else if ("JUDGE_DISAGREEMENT".equals(reasonCode)) {
+            verdictNote = "，" + pass + " 票 PASS / " + fail + " 票 FAIL 未达 " + policy
+                    + " 策略要求（不硬判）";
+        }
         result.setReason(clipReason(String.join("; ", summaryParts) + " => " + label
-                + " by " + policy));
+                + " by " + policy + verdictNote));
         return result;
     }
 
