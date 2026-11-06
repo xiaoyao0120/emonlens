@@ -81,7 +81,7 @@ smoke:
 	@echo "（密码经 make smoke PASS=<密码> 传入；忘记密码可在 .env 设 EMONLENS_ADMIN_PASSWORD 后重启轮换）"
 	@bash scripts/smoke.sh $(or $(BASE),http://127.0.0.1:8300) $(or $(ADMIN_USER),admin) $(PASS)
 
-# 全功能黑盒验证（84 项，幂等可重复；发布验收用）
+# 全功能黑盒验证（100 项，幂等可重复；发布验收用，含 SDK 评测通道）
 verify:
 	@python3 scripts/verify_all.py $(or $(BASE),http://127.0.0.1:8300) $(or $(ADMIN_USER),admin) $(PASS)
 

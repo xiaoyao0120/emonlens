@@ -571,6 +571,115 @@ def verify_score_dashboard():
     check("otlp", "OTLP/JSON 上报受理", ok(j), j)
 
 
+def verify_sdk_channel(tid):
+    """SDK 评测通道：服务端派任务 → 用仓库里的真实 Python SDK 打分 → 回写 → Gate 放行。
+
+    这条链路是"外部 scorer 回写"的收口，之前发布门禁里没有覆盖（只验了 prompt 通道），
+    而它恰恰最容易在两侧协议漂移时静默坏掉：SDK 取不到任务、key 对不上、回写字段变了，
+    后端单测都不会红。
+    """
+    section("N. SDK 评测通道（任务 → Python SDK → 回写 → Gate）")
+
+    # 1) SDK 评估器（必须声明 requiredFields，否则 400）
+    ev_key = "e2e-sdk-" + uuid.uuid4().hex[:6]
+    code, j = req("POST", "/api/v1/evaluators",
+                  {"evaluatorKey": ev_key, "type": "SDK",
+                   "spec": {"type": "SDK", "requiredFields": ["candidate_output"]}}, token=TOKEN)
+    ev_id = (data_of(j) or {}).get("id")
+    check("sdk", "创建 SDK 评估器", ok(j) and ev_id, j)
+    if not ev_id:
+        return
+
+    # 2) 数据集 + 样本（复用已 ingest 的 trace）
+    code, j = req("POST", "/api/v1/datasets",
+                  {"datasetKey": "e2e-sdk-ds-" + uuid.uuid4().hex[:6]}, token=TOKEN)
+    ds_id = (data_of(j) or {}).get("id")
+    check("sdk", "创建数据集", ok(j) and ds_id, j)
+    if not ds_id:
+        return
+    code, j = req("POST", f"/api/v1/datasets/{ds_id}/items", {"traceId": tid}, token=TOKEN)
+    check("sdk", "收录 trace 为样本", ok(j), j)
+
+    # 3) 跑一次，此刻应有 open SDK task（样本级结论是 AWAITING_SDK_RESULTS 的 UNKNOWN）
+    code, j = req("POST", f"/api/v1/datasets/{ds_id}/runs/async",
+                  {"evaluatorIds": [ev_id], "mode": "TRACE"},
+                  token=TOKEN, idempotency="e2e-sdk-run-" + uuid.uuid4().hex[:8])
+    run_id = (data_of(j) or {}).get("runId")
+    check("sdk", "提交 SDK 评估 run", ok(j) and run_id, j)
+    if not run_id:
+        return
+
+    run = {}
+    for _ in range(60):
+        time.sleep(1)
+        code, j = req("GET", f"/api/v1/datasets/{ds_id}/runs", token=TOKEN)
+        rows = data_of(j) or []
+        run = next((r for r in rows if r.get("id") == run_id), {})
+        if run.get("status") in ("COMPLETED", "PARTIAL_FAILED", "FAILED"):
+            break
+    check("sdk", "run 到达终态且留有待回写任务",
+          run.get("status") == "COMPLETED" and (run.get("unknownCount") or 0) == 1, run.get("status"))
+
+    # 4) 签发开放 token（Gate 需要 score:read）
+    code, j = req("POST", "/api/v1/open-tokens",
+                  {"name": "e2e-sdk-" + uuid.uuid4().hex[:6],
+                   "scopes": "eval:read,eval:content,eval:run,score:read"}, token=TOKEN)
+    api_token = (data_of(j) or {}).get("token")
+    check("sdk", "签发开放 token", ok(j) and api_token, j)
+    if not api_token:
+        return
+
+    # 5) 用仓库里的真实 SDK 跑一轮（而不是手搓 HTTP：这样 SDK 与服务的协议漂移才会被抓到）
+    sdk_available = True
+    try:
+        sdk_src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "emonlens-sdk-python", "src")
+        if sdk_src not in sys.path:
+            sys.path.insert(0, sdk_src)
+        from emonlens import run_sdk_scorers  # noqa: E402
+    except Exception as exc:
+        sdk_available = False
+        check("sdk", "仓库内 Python SDK 可用", False, exc)
+    check("sdk", "仓库内 Python SDK 可用", sdk_available)
+    if not sdk_available:
+        return
+
+    def _scorer(sample):
+        text = (sample.candidate_output or "") + (sample.input or "")
+        ok_flag = "额度" in text or "50,000" in text or bool(text)
+        return {"label": "PASS" if ok_flag else "FAIL",
+                "score": 9.0 if ok_flag else 2.0,
+                "reason": "verify_all：SDK 通道回写",
+                "reasonCode": "SDK_VERIFY_PASS" if ok_flag else "SDK_VERIFY_FAIL"}
+
+    try:
+        summary = run_sdk_scorers(run_id, {ev_key: _scorer}, host=BASE, api_token=api_token)
+    except Exception as exc:
+        check("sdk", "SDK 拉任务并回写", False, exc)
+        return
+    check("sdk", "SDK 拉任务并回写",
+          (summary.get("pushed") or 0) >= 1 and (summary.get("conflicts") or 0) == 0,
+          {"pushed": summary.get("pushed"), "conflicts": summary.get("conflicts"),
+           "outcomes": summary.get("outcomes")})
+
+    # 6) 回写后计数必须翻正（UNKNOWN → PASS），否则等于没回写
+    code, j = req("GET", f"/api/v1/datasets/{ds_id}/runs", token=TOKEN)
+    rows = data_of(j) or []
+    after = next((r for r in rows if r.get("id") == run_id), {})
+    check("sdk", "回写后 run 计数翻正（pass≥1 / unknown=0）",
+          (after.get("passCount") or 0) >= 1 and (after.get("unknownCount") or 0) == 0,
+          {"pass": after.get("passCount"), "unknown": after.get("unknownCount"),
+           "error": after.get("errorCount")})
+
+    # 7) Gate：这条 run 的唯一评估器就是 SDK，能放行说明通道真的接通了
+    code, j = req("POST", "/api/v1/open/quality-gates", {"runId": run_id}, api_token=api_token)
+    decision = (data_of(j) or {}).get("decision")
+    check("sdk", "Gate 在 SDK 回写后放行", ok(j) and decision == "PASS",
+          {"code": j.get("code"), "decision": decision, "message": j.get("message")})
+
+    req("POST", f"/api/v1/evaluators/{ev_id}/disable", token=TOKEN)
+
+
 def cleanup(mon, ev_id, bad_tid):
     section("清理配置类资源")
     if mon and mon.get("id"):
@@ -614,6 +723,7 @@ def main():
     verify_monitor_flow(bad_tid, mon)
     ev_id = verify_evaluation(tid)
     verify_dataset(tid, ev_id)
+    verify_sdk_channel(tid)
     verify_prompt_playground()
     verify_matrix_and_prompt_binding()
     verify_ops_pages(tid)

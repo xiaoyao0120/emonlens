@@ -113,7 +113,7 @@ emonlens-0.1.0/
 ├── sql/emonlens-starrocks.sql     可选：span 数据面 OLAP
 ├── sdk/                   Python SDK wheel/sdist
 ├── scripts/smoke.sh        13 项发布冒烟
-├── scripts/verify_all.py   84 项全功能黑盒验证
+├── scripts/verify_all.py   100 项全功能黑盒验证（含 SDK 评测通道）
 ├── docs/                  设计文档与操作手册
 ├── VERSION
 └── README.md
