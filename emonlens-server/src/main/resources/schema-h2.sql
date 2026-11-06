@@ -1465,5 +1465,7 @@ CREATE INDEX IF NOT EXISTS idx_push_created ON et_push_record (created_at);
 CREATE INDEX IF NOT EXISTS idx_health_created ON et_dataset_health_snapshot (created_at);
 CREATE INDEX IF NOT EXISTS idx_event_delivery_created ON et_event_handler_delivery (created_at);
 ALTER TABLE et_eval_result ADD COLUMN IF NOT EXISTS judge_records_json TEXT;
+-- 结论原因码：只留在内存里时无法追溯“为什么判 UNKNOWN”，落库后才能筛选与复盘
+ALTER TABLE et_eval_result ADD COLUMN IF NOT EXISTS reason_code VARCHAR(64);
 ALTER TABLE et_dataset_item ADD COLUMN IF NOT EXISTS attachments_json TEXT;
 ALTER TABLE et_dataset_revision_item ADD COLUMN IF NOT EXISTS attachments_json TEXT;

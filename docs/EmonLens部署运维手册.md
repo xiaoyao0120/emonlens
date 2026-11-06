@@ -322,6 +322,8 @@ docker compose logs mysql # 数据库日志
   mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-11-eval-rule-v2.sql
   # R2-2：端用户反馈（预签 token / 类型化反馈）
   mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-12-end-user-feedback.sql
+  # R3-3：评估结果结论原因码落库（JUDGE_DISAGREEMENT / JUDGE_MEAN_BELOW_MIN_SCORE 等）
+  mysql -u<user> -p <db> < emonlens-server/sql/migrations/2026-11-06-eval-result-reason-code.sql
   ```
 
   脚本均可重复执行；pilot 脚本开头会输出重复明细预检，若返回行或唯一键创建失败，

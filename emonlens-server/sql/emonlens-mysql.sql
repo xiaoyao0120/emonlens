@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS et_eval_result (
     label             VARCHAR(32)  NOT NULL,
     confidence        DECIMAL(4,3),
     reason            VARCHAR(1024),
+    reason_code       VARCHAR(64),
     evidence          TEXT,
     criterion_results_json MEDIUMTEXT,
     judge_model       VARCHAR(128),

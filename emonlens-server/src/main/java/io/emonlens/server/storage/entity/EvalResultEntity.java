@@ -64,8 +64,10 @@ public class EvalResultEntity {
 
     private LocalDateTime createdAt;
 
-    /** 数据集运行原因码（仅内存传递，不落 et_eval_result） */
-    @TableField(exist = false)
+    /**
+     * 结论原因码（JUDGE_DISAGREEMENT / JUDGE_MEAN_BELOW_MIN_SCORE 等）。
+     * 落库：排查与筛选要靠它，只留在内存里的话"为什么判 UNKNOWN"事后无法追溯。
+     */
     private String reasonCode;
 
     /** 数据集运行：本次是否实际发起了评审模型调用（用于调用次数统计） */

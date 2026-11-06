@@ -1462,15 +1462,15 @@ const runItemColumns = computed(() => {
     { title: '分数', key: 'score', width: 65, align: 'right', render: (r) => h('span', { class: 'num' }, r.score == null ? '—' : String(r.score)) },
     { title: '原因', key: 'reason', minWidth: 210, ellipsis: { tooltip: true }, render: (r) =>
         h('span', {}, [
-          h('span', {}, r.reason || '—'),
+          // 中文结论放最前：列宽有限会截断，解释放在长 reason 后面等于看不见
           r.resultDetails?.reasonCode
             ? h('span', {
                 class: 'mono',
-                style: 'color:var(--text-muted);font-size:11px;margin-left:6px',
-                // 机器码放 tooltip，正文给人看得懂的原因；未收录的 code 会原样返回
+                style: 'color:var(--text-muted);font-size:11px;margin-right:6px',
                 title: r.resultDetails.reasonCode
               }, enumText('evalReason', r.resultDetails.reasonCode))
-            : null
+            : null,
+          h('span', {}, r.reason || '—')
         ]) },
     { title: '调用/用量', key: 'usage', width: 150, render: (r) => h('span', { style: 'font-size:11.5px;color:var(--text-secondary)' }, itemUsageText(r.resultDetails)) }
   )
@@ -1507,14 +1507,15 @@ const taskColumns = [
   { title: '耗时', key: 'latencyMs', width: 70, align: 'right', render: (r) => r.latencyMs == null ? '—' : `${r.latencyMs}ms` },
   { title: '原因', key: 'reason', minWidth: 220, ellipsis: { tooltip: true }, render: (r) =>
       h('span', {}, [
-        h('span', {}, r.reason || '—'),
+        // 中文结论放最前：列宽有限会截断，解释放在长 reason 后面等于看不见
         r.reasonCode
           ? h('span', {
               class: 'mono',
-              style: 'color:var(--text-muted);font-size:11px;margin-left:6px',
+              style: 'color:var(--text-muted);font-size:11px;margin-right:6px',
               title: r.reasonCode
             }, enumText('evalReason', r.reasonCode))
-          : null
+          : null,
+        h('span', {}, r.reason || '—')
       ]) },
   { title: '证据', key: 'evidenceHash', width: 90, render: (r) => r.evidenceHash
       ? h('span', { class: 'mono', style: 'font-size:10.5px', title: r.evidenceHash }, r.evidenceHash.slice(0, 8))

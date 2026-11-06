@@ -203,7 +203,17 @@ const columns = [
   { title: '评审Token', key: 'tokens', width: 100, align: 'right', render: (r) => (r.promptTokens == null && r.completionTokens == null)
     ? h('span', { style: 'color:var(--text-muted);font-size:12px' }, '—')
     : h('span', { class: 'num' }, (r.promptTokens ?? 0) + '+' + (r_completion(r) ?? 0)) },
-  { title: '原因', key: 'reason', ellipsis: { tooltip: true } },
+  // 原因列：中文结论放最前（列宽有限会截断，解释放后面等于看不见），原始码留在 tooltip
+  { title: '原因', key: 'reason', ellipsis: { tooltip: true }, render: (r) => h('span', {}, [
+      r.reasonCode
+        ? h('span', {
+            class: 'mono',
+            style: 'color:var(--text-muted);font-size:11px;margin-right:6px',
+            title: r.reasonCode
+          }, enumText('evalReason', r.reasonCode))
+        : null,
+      h('span', {}, r.reason || '—')
+    ]) },
   { title: '时间', key: 'createdAt', width: 160, render: (r) => h('span', { class: 'mono', style: 'font-size:11.5px' }, fmtTs(r.createdAt)) }
 ]
 

@@ -20,6 +20,8 @@ public class EvalResultVO {
     private String label;
     private BigDecimal confidence;
     private String reason;
+    /** 结论原因码：界面翻成中文展示，原始码留在 tooltip 里供排查 */
+    private String reasonCode;
     private String judgeModel;
     /** LLM_JUDGE criterion 级结果原始 JSON；无 criteria 配置时为 null */
     private String criterionResultsJson;
@@ -47,6 +49,7 @@ public class EvalResultVO {
         vo.setLabel(entity.getLabel());
         vo.setConfidence(entity.getConfidence());
         vo.setReason(entity.getReason());
+        vo.setReasonCode(entity.getReasonCode());
         vo.setJudgeModel(entity.getJudgeModel());
         vo.setCriterionResultsJson(entity.getCriterionResultsJson());
         vo.setJudgeMode(entity.getJudgeMode());

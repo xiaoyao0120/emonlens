@@ -52,6 +52,8 @@ class JudgeUpgradeFlowTest extends AbstractIntegrationTest {
     @Resource
     private io.emonlens.server.storage.mapper.DatasetRunItemMapper datasetRunItemMapper;
     @Resource
+    private io.emonlens.server.storage.mapper.EvalResultMapper evalResultMapper;
+    @Resource
     private org.springframework.context.ApplicationContext applicationContext;
 
     @TestConfiguration
@@ -272,5 +274,24 @@ class JudgeUpgradeFlowTest extends AbstractIntegrationTest {
         // reason 必须自带人话解释：界面只展示 reason（reasonCode 不落库），
         // 没有这句用户只看到 UNKNOWN 完全不知道为什么。
         assertThat(details).contains("未达阈值");
+
+        // 原因码还要能落库并读回来：它曾经是 @TableField(exist = false)（只在内存传递），
+        // 读回来就丢，事后无法按"为什么判成这样"筛选复盘。
+        // 注意：数据集跑批只写 run item 明细，不写 et_eval_result，所以这里直接验列与映射本身。
+        io.emonlens.server.storage.entity.EvalResultEntity probe =
+                new io.emonlens.server.storage.entity.EvalResultEntity();
+        probe.setEvaluatorId("judge-mean-probe");
+        probe.setEvaluatorKey("judge-mean-probe");
+        probe.setEvaluatorVersion(1);
+        probe.setWorkspaceId(WS);
+        probe.setAgentKey("judge-agent");
+        probe.setTraceId("judge-mean-probe-trace");
+        probe.setAttempt(1);
+        probe.setLabel(io.emonlens.server.storage.entity.EvaluatorEntity.LABEL_UNKNOWN);
+        probe.setReasonCode("JUDGE_MEAN_BELOW_MIN_SCORE");
+        probe.setCreatedAt(LocalDateTime.now());
+        evalResultMapper.insert(probe);
+        assertThat(evalResultMapper.selectById(probe.getId()).getReasonCode())
+                .as("reasonCode 必须真的落库").isEqualTo("JUDGE_MEAN_BELOW_MIN_SCORE");
     }
 }
