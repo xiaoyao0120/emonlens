@@ -263,6 +263,52 @@ test.describe.serial('EmonLens 页面操作', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
+  test('Trace 对比页：两条链路对齐后给出耗时与差异', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const stamp = Date.now().toString(36);
+    const traceA = `ui-e2e-cmp-a-${stamp}`;
+    const traceB = `ui-e2e-cmp-b-${stamp}`;
+    // A：单 span，约 1s；B：多一个 llm span 且总耗时更长 —— 这样 Δ 与「差异」列都有内容可断言
+    const post = (spans) =>
+      ctx.post('/api/v1/ingest/events', { headers: { 'X-Trust-Key': INGEST_KEY }, data: spans });
+    await post([
+      {
+        traceId: traceA, spanId: 'root', agentKey: AGENT, agentVersion: 'v1', spanType: 'agent',
+        spanName: 'invoke_agent', startTime: localDateTime(-9), endTime: localDateTime(-8),
+        input: '对比 A', output: 'A 输出',
+      },
+    ]);
+    await post([
+      {
+        traceId: traceB, spanId: 'root', agentKey: AGENT, agentVersion: 'v1', spanType: 'agent',
+        spanName: 'invoke_agent', startTime: localDateTime(-7), endTime: localDateTime(-4),
+        input: '对比 B', output: 'B 输出',
+      },
+      {
+        traceId: traceB, spanId: 'llm-1', parentSpanId: 'root', agentKey: AGENT, spanType: 'llm',
+        spanName: 'call_model', startTime: localDateTime(-6), endTime: localDateTime(-5),
+        modelName: 'fake-model', input: 'hi', output: 'hello',
+      },
+    ]);
+    await waitTrace(ctx, token, traceA);
+    await waitTrace(ctx, token, traceB);
+
+    await login(page);
+    await page.goto(`/traces/compare?a=${traceA}&b=${traceB}`);
+    // 结论条：总耗时/总成本/Tokens/错误 四项必须出现
+    await expect(page.locator('body')).toContainText('总耗时', { timeout: 30_000 });
+    await expect(page.locator('body')).toContainText('总成本');
+    await expect(page.locator('body')).toContainText('Tokens');
+    // B 更慢：应该给出「A 慢」或「B 慢」而不是空白
+    await expect(page.locator('.verdict-row')).toContainText(/[AB] 慢|持平/, { timeout: 30_000 });
+    // span 对齐表：至少有 A/B 两侧耗时与 Δ 列
+    await expect(page.locator('.n-data-table-tbody .n-data-table-tr').first()).toBeVisible({ timeout: 30_000 });
+    const tableText = await page.locator('.n-data-table-tbody').first().innerText();
+    expect(tableText).not.toContain('NaN');
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
   test('矩阵实验与告警页可正常打开', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     await login(page);
@@ -809,6 +855,97 @@ test.describe.serial('EmonLens 页面操作（人工复核）', () => {
     expect(dims, '标注后信任分应重算，且 output 维度带分数').toBeTruthy();
     expect(dims.output.score, '人工 PASS 应体现在 output 维度分数').toBeGreaterThan(0);
     expect(dims.output.basis, 'output 维度应基于 eval_pass_rate').toBe('eval_pass_rate');
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+});
+// ---------------------------------------------------------------------------
+// 在线评估（规则命中 → 评估结果页可查、可按标签过滤）
+// 这条链路此前完全没有页面级覆盖：数据集跑批不写 et_eval_result，
+// 只有"在线规则评估 / 标注 / 人工评分 / 端用户反馈"会写，规则是其中最主流的入口。
+// ---------------------------------------------------------------------------
+
+test.describe.serial('EmonLens 页面操作（在线评估）', () => {
+  let ctx;
+  let token;
+
+  test.beforeAll(async ({ baseURL }) => {
+    ctx = await request.newContext({ baseURL });
+    token = await apiLogin(ctx);
+  });
+
+  test.afterAll(async () => {
+    await ctx?.dispose();
+  });
+
+  test('规则命中后评估结果页可查到，并按标签过滤', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const auth = { Authorization: `Bearer ${token}` };
+    const stamp = Date.now().toString(36);
+
+    // 顺序很重要：规则必须在 trace 收口之前就位，否则完成事件没有规则可命中
+    const ev = await (
+      await ctx.post('/api/v1/evaluators', {
+        headers: auth,
+        data: {
+          evaluatorKey: `ui-e2e-rule-ev-${stamp}`,
+          type: 'EXPRESSION',
+          spec: { type: 'EXPRESSION', passWhen: 'span_count >= 0' },
+        },
+      })
+    ).json();
+    expect(ev.code, JSON.stringify(ev)).toBe(0);
+
+    const rule = await (
+      await ctx.post('/api/v1/eval-rules', {
+        headers: auth,
+        data: {
+          ruleKey: `ui-e2e-rule-${stamp}`,
+          scope: 'TRACE',
+          evaluatorIds: [ev.data.id],
+          sampleRate: 1,
+          priority: 100,
+        },
+      })
+    ).json();
+    expect(rule.code, JSON.stringify(rule)).toBe(0);
+
+    const ruleTrace = `ui-e2e-rule-trace-${stamp}`;
+    await ingestTrace(ctx, ruleTrace);
+    await waitTrace(ctx, token, ruleTrace);
+
+    // 规则评估是异步的：等它把结果写进 et_eval_result
+    let rows = [];
+    for (let i = 0; i < 40; i += 1) {
+      const resp = await (
+        await ctx.get(`/api/v1/eval-results?traceId=${ruleTrace}&pageNumber=1&pageSize=20`, { headers: auth })
+      ).json();
+      rows = Array.isArray(resp?.data) ? resp.data : (resp?.data?.records || []);
+      if (rows.length > 0) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(rows.length, '在线规则应产出评估结果').toBeGreaterThan(0);
+    expect(rows[0].label, '表达式恒真应判 PASS').toBe('PASS');
+
+    await login(page);
+    await page.goto('/evaluations');
+    const tableRows = page.locator('.n-data-table-tbody .n-data-table-tr');
+    await expect(tableRows.first()).toBeVisible({ timeout: 30_000 });
+    const before = await tableRows.count();
+    expect(before, '评估结果页应有数据').toBeGreaterThan(0);
+    await expect(page.locator('body')).toContainText('总评估');
+
+    // 按标签过滤：选「通过」，列表里就只应剩通过的行
+    await page.locator('.n-base-selection').filter({ hasText: '全部标签' }).first().click({ timeout: 10_000 });
+    // 精确匹配「通过」：'未通过' 也包含这两个字，用子串过滤会误选
+    await page.locator('.n-base-select-option:visible').filter({ hasText: /^通过$/ }).first().click({ timeout: 10_000 });
+    await expect(tableRows.first()).toBeVisible({ timeout: 30_000 });
+    const after = await tableRows.count();
+    expect(after, '按标签过滤后行数不应增加').toBeLessThanOrEqual(before);
+    expect(after, '过滤后应至少命中一条').toBeGreaterThan(0);
+    for (let i = 0; i < Math.min(after, 5); i += 1) {
+      await expect(tableRows.nth(i)).toContainText('通过');
+    }
 
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });

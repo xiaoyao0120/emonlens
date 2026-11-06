@@ -4,8 +4,7 @@
       <div class="page-toolbar">
         <div class="toolbar-filters">
           <n-select v-model:value="labelFilter" placeholder="全部标签" size="small" style="width: 150px" clearable
-            :options="['PASS', 'FAIL', 'EVAL_UNAVAILABLE', 'N/A'].map((l) => ({ label: l, value: l }))"
-            @update:value="search" />
+            :options="labelOptions" @update:value="search" />
           <n-select v-model:value="evaluatorFilter" placeholder="全部评估器" size="small" style="width: 200px" clearable
             :options="evaluatorOptions" @update:value="search" />
           <n-input v-model:value="traceFilter" placeholder="按 traceId 过滤" size="small" style="width: 220px" clearable @clear="search" />
@@ -155,6 +154,10 @@ const canRun = computed(() => auth.hasPermission('workspace:trust:evaluation:run
 const records = ref([]), loading = ref(false), showRun = ref(false), labelFilter = ref(null)
 const evaluatorFilter = ref(null), traceFilter = ref('')
 const evaluatorOptions = ref([])
+// 标签下拉必须走 enumText：之前直接渲染 PAS/FAIL 原始枚举，与表格里中文的「标签」列自相矛盾
+// （页面 E2E 在筛选时抓到的）
+const LABEL_VALUES = ['PASS', 'FAIL', 'UNKNOWN', 'EVAL_UNAVAILABLE', 'N/A']
+const labelOptions = LABEL_VALUES.map((l) => ({ label: enumText('evalLabel', l), value: l }))
 const running = ref(false)
 const runForm = reactive({ evaluatorId: null, traceIds: '' })
 const stats = reactive({ total: 0, pass: 0, fail: 0, other: 0, rate: 0 })
