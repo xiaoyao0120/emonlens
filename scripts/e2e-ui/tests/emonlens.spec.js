@@ -241,6 +241,25 @@ test.describe.serial('EmonLens 页面操作', () => {
     }
     await expect(page.locator('.n-data-table-tr').filter({ hasText: '%' }).first()).toBeVisible();
 
+    // 纵轴是通过率时必须给出 95% 置信区间：1/1 和 30/30 都是 100%，只画点会让人一样相信。
+    // 默认纵轴就是通过率，所以这里直接断言误差线与图例说明存在。
+    const whiskers = await page.locator('svg.chart line.ci-whisker').count();
+    expect(whiskers, '纵轴为通过率时应画出置信区间误差线').toBeGreaterThan(0);
+    await expect(page.locator('.legend')).toContainText('95% 置信区间');
+    const ciGeometry = await page.locator('svg.chart line.ci-whisker').evaluateAll((nodes) =>
+      nodes.map((n) => ({ y1: n.getAttribute('y1'), y2: n.getAttribute('y2') })),
+    );
+    for (const g of ciGeometry) {
+      expect(Number.isNaN(Number(g.y1)), `误差线 y1=${g.y1} 不能是 NaN`).toBe(false);
+      expect(Number.isNaN(Number(g.y2)), `误差线 y2=${g.y2} 不能是 NaN`).toBe(false);
+    }
+    // 阈值必须写进悬停提示：只画一条线而不说"这是 95% CI、n 是多少"，读者无法判断可信度
+    const firstTip = await page.locator('svg.chart circle title').first().textContent();
+    expect(firstTip, `散点提示应含置信区间与样本量，实际: ${firstTip}`).toContain('95% CI');
+    expect(firstTip).toContain('n=');
+    // 纵轴要有刻度，否则跨半幅的误差线看起来像渲染错误
+    await expect(page.locator('svg.chart text.tick').filter({ hasText: '100%' }).first()).toBeVisible();
+
     // 散点轴可切换：换成「平均延迟 × 覆盖率」后坐标仍不能出现 NaN（换轴最容易漏兜底）
     const axisSelects = page.locator('.axis-pickers .n-base-selection');
     await axisSelects.nth(0).click({ timeout: 10_000 });

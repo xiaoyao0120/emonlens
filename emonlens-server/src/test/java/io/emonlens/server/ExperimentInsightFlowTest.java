@@ -159,6 +159,34 @@ class ExperimentInsightFlowTest extends AbstractIntegrationTest {
         assertThat(scatter.path("data").path("axes").path("x").asText()).contains("cost");
 
         // 覆盖率过滤：只保留 coverage >= 50 的点
+        // 通过率必须带 95% 置信区间：4/4 与 1/1 都是 100%，但可信程度完全不同
+        JsonNode fourOfFour = null;
+        JsonNode oneOfOne = null;
+        for (JsonNode p : points) {
+            if (p.path("judgedCount").asInt() == 4) {
+                fourOfFour = p;
+            } else if (p.path("judgedCount").asInt() == 1) {
+                oneOfOne = p;
+            }
+        }
+        assertThat(fourOfFour).as("应有一个 4 条已判的样本点").isNotNull();
+        assertThat(oneOfOne).as("应有一个 1 条已判的样本点").isNotNull();
+        assertThat(fourOfFour.path("passRateLow").asDouble())
+                .as("4/4 的 Wilson 下界约 51: %s", fourOfFour).isBetween(45.0, 60.0);
+        assertThat(oneOfOne.path("passRateLow").asDouble())
+                .as("1/1 的 Wilson 下界约 21: %s", oneOfOne).isLessThan(30.0);
+        assertThat(fourOfFour.path("passRateLow").asDouble())
+                .as("样本越多下界越高").isGreaterThan(oneOfOne.path("passRateLow").asDouble());
+        // 区间必须包住点值，且上限不超过 100
+        for (JsonNode p : points) {
+            assertThat(p.path("passRateHigh").asDouble()).isLessThanOrEqualTo(100.0);
+            assertThat(p.path("passRateLow").asDouble())
+                    .as("下界不得高于点值: %s", p)
+                    .isLessThanOrEqualTo(p.path("passRate").asDouble() + 0.05);
+            assertThat(p.path("passRateHigh").asDouble())
+                    .as("上界不得低于点值: %s", p)
+                    .isGreaterThanOrEqualTo(p.path("passRate").asDouble() - 0.05);
+        }
         JsonNode filtered = readTree(get("/api/v1/datasets/" + datasetId
                 + "/runs/scatter?windowDays=7&minCoverage=50"));
         assertThat(filtered.path("data").path("points")).hasSize(1);

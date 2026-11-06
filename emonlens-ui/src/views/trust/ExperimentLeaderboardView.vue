@@ -32,8 +32,24 @@
         <svg :width="chartWidth" :height="chartHeight" class="chart">
           <line :x1="pad" :y1="chartHeight - pad" :x2="chartWidth - pad" :y2="chartHeight - pad" class="axis" />
           <line :x1="pad" :y1="pad" :x2="pad" :y2="chartHeight - pad" class="axis" />
+          <!-- 纵轴网格与刻度：没有刻度时，一条跨越半幅的置信区间看着像渲染错误，
+               而它可能只是 n=1 的真实不确定性（1/1 的 95% CI 就是 21%~100%）。 -->
+          <g v-for="t in yTicks" :key="'yt-' + t.ratio">
+            <line :x1="pad" :y1="t.y" :x2="chartWidth - pad" :y2="t.y" class="grid" />
+            <text :x="pad - 6" :y="t.y + 3" class="tick" text-anchor="end">{{ t.label }}</text>
+          </g>
           <text :x="chartWidth - pad" :y="chartHeight - pad + 16" class="tick" text-anchor="end">{{ METRICS[axisX].label }}</text>
-          <text :x="pad - 6" :y="pad - 6" class="tick" text-anchor="start">{{ METRICS[axisY].label }}</text>
+          <text :x="pad - 6" :y="pad - 12" class="tick" text-anchor="start">{{ METRICS[axisY].label }}</text>
+          <g v-if="showCi">
+            <g v-for="(p, i) in points" :key="'ci-' + i">
+              <line v-if="ciOf(p)" :x1="cx(p)" :y1="ciY(p, ciOf(p)[0])" :x2="cx(p)" :y2="ciY(p, ciOf(p)[1])"
+                class="ci-whisker" />
+              <line v-if="ciOf(p)" :x1="cx(p) - 3" :y1="ciY(p, ciOf(p)[0])" :x2="cx(p) + 3" :y2="ciY(p, ciOf(p)[0])"
+                class="ci-cap" />
+              <line v-if="ciOf(p)" :x1="cx(p) - 3" :y1="ciY(p, ciOf(p)[1])" :x2="cx(p) + 3" :y2="ciY(p, ciOf(p)[1])"
+                class="ci-cap" />
+            </g>
+          </g>
           <circle v-for="(p, i) in points" :key="i" :cx="cx(p)" :cy="cy(p)" :r="radius(p)"
             :class="p.priced ? 'dot' : 'dot unpriced'">
             <title>{{ tip(p) }}</title>
@@ -42,6 +58,7 @@
         <div class="legend">
           <span><i class="dot-legend"></i> 已计价</span>
           <span><i class="dot-legend unpriced"></i> 缺价目</span>
+          <span v-if="showCi">误差线 = 通过率 95% 置信区间（Wilson，n 为已判定条数）</span>
           <span>悬停查看 run 明细</span>
         </div>
       </div>
@@ -126,10 +143,31 @@ function cy(p) {
 function radius(p) {
   return 4 + 8 * Math.sqrt(itemCount(p) / maxItems.value)
 }
+// 通过率的 95% 置信区间（Wilson，后端算）。散点只画点会让人把 n=1 的 100% 和 n=30 的 100% 当成一回事，
+// 所以纵轴取通过率时补一条误差线，提示里也写明样本量。
+function ciOf(p) {
+  if (p.passRateLow == null || p.passRateHigh == null) return null
+  return [Number(p.passRateLow), Number(p.passRateHigh)]
+}
+function ciY(p, value) {
+  return chartHeight - pad - (chartHeight - pad * 2) * (value / maxY.value)
+}
+const showCi = computed(() => axisY.value === 'passRate')
+// 纵轴刻度：5 等分，标签用当前指标自己的格式化函数（通过率带 %、成本带 4 位小数）
+const yTicks = computed(() => {
+  const metric = METRICS[axisY.value]
+  return [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
+    ratio,
+    y: chartHeight - pad - (chartHeight - pad * 2) * ratio,
+    label: metric.fmt(maxY.value * ratio)
+  }))
+})
 function tip(p) {
+  const ci = ciOf(p)
   const parts = [
     p.candidateLabel || p.runId,
-    '通过率 ' + (p.passRate == null ? '—' : p.passRate + '%'),
+    '通过率 ' + (p.passRate == null ? '—' : p.passRate + '%')
+      + (ci ? `（95% CI ${ci[0]}–${ci[1]}%，n=${p.judgedCount ?? 0}）` : ''),
     '覆盖 ' + (p.coverage == null ? '—' : p.coverage + '%'),
     '成本 ' + (p.priced ? Number(p.cost ?? 0).toFixed(4) : '不可计价'),
     '延迟 ' + (p.avgLatencyMs == null ? '—' : p.avgLatencyMs + 'ms'),
@@ -215,9 +253,12 @@ watch(datasetId, (value) => {
 .chart-wrap { display: flex; flex-direction: column; gap: 8px; }
 .chart { background: var(--bg-subtle); border-radius: 6px; }
 .axis { stroke: var(--border); stroke-width: 1; }
+.grid { stroke: var(--border); stroke-width: 1; opacity: 0.35; stroke-dasharray: 3 3; }
 .tick { fill: var(--text-muted); font-size: 11px; }
 .dot { fill: var(--primary); opacity: 0.75; }
 .dot.unpriced { fill: var(--warn); opacity: 0.6; }
+.ci-whisker { stroke: var(--text-muted); stroke-width: 1; opacity: 0.55; }
+.ci-cap { stroke: var(--text-muted); stroke-width: 1; opacity: 0.55; }
 .legend { display: flex; gap: 16px; font-size: 11.5px; color: var(--text-muted); align-items: center; }
 .dot-legend { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--primary); margin-right: 4px; }
 .dot-legend.unpriced { background: var(--warn); }

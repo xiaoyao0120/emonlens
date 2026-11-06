@@ -79,6 +79,16 @@ public class ExperimentInsightService {
             point.put("cost", cost.get("cost"));
             point.put("priced", cost.get("priced"));
             point.put("avgLatencyMs", averageLatency(items));
+            // 通过率的 95% 置信区间（Wilson）：小样本的 100% 和 30 样本的 100% 不是一回事，
+            // 散点若只画点会让人过度相信 n=3 的结果。judged = pass + fail（UNKNOWN 不计入分母，
+            // 与 passRateOf 的口径一致）。
+            int judged = (run.getPassCount() == null ? 0 : run.getPassCount())
+                    + (run.getFailCount() == null ? 0 : run.getFailCount());
+            int passed = run.getPassCount() == null ? 0 : run.getPassCount();
+            point.put("judgedCount", judged);
+            Double[] ci = wilsonInterval(passed, judged);
+            point.put("passRateLow", ci == null ? null : ci[0]);
+            point.put("passRateHigh", ci == null ? null : ci[1]);
             point.put("repetitionGroup", groupKey(run));
             point.put("startedAt", run.getStartedAt());
             if (filterMatch(run, model, candidateLabel, minCoverage)) {
@@ -285,6 +295,26 @@ public class ExperimentInsightService {
             spec.stdDev = 0.0;
         }
         return spec;
+    }
+
+    /**
+     * Wilson score interval (95%) in percent, or null when nothing was judged.
+     * Chosen over the normal approximation because it stays inside [0, 100] and behaves sanely at n=1..5,
+     * which is exactly where the plain ratio lies.
+     */
+    private static Double[] wilsonInterval(int successes, int total) {
+        if (total <= 0) {
+            return null;
+        }
+        double z = 1.96;
+        double n = total;
+        double p = successes / n;
+        double denom = 1 + z * z / n;
+        double center = (p + z * z / (2 * n)) / denom;
+        double margin = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom;
+        double low = Math.max(0, center - margin) * 100;
+        double high = Math.min(1, center + margin) * 100;
+        return new Double[] { round(low, 1), round(high, 1) };
     }
 
     private static double round(double value, int scale) {
