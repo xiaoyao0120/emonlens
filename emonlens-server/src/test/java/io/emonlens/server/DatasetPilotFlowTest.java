@@ -379,10 +379,26 @@ class DatasetPilotFlowTest extends AbstractIntegrationTest {
         assertThat(detail.path("data").path("run").path("passCount").asInt()).isEqualTo(1);
         assertThat(detail.path("data").path("run").path("passRate").asDouble()).isEqualTo(100.0);
         assertThat(detail.path("data").path("run").path("coverage").asDouble()).isEqualTo(50.0);
-        JsonNode tasks = readTree(get("/api/v1/datasets/" + datasetId + "/runs/" + runId + "/tasks"))
-                .path("data");
-        assertThat(tasks.path("summary").path("cancelled").asInt()).isGreaterThanOrEqualTo(1);
-        assertThat(tasks.path("records").findValuesAsText("status")).contains("CANCELLED");
+        // 取消只把 PENDING 收成 CANCELLED，进行中的任务要等"终态收口"异步转 SKIPPED——
+        // 所以既不能断言"一定有一个 CANCELLED"（并发下两条都可能被领走），
+        // 也不能断言"立即没有 open 任务"。这里等收口完成，再断言最终不变式：
+        //   所有任务都有终态，且未完成的按 CANCELLED / SKIPPED 之一收口。
+        JsonNode settled = await(() -> {
+                    try {
+                        return readTree(get("/api/v1/datasets/" + datasetId + "/runs/" + runId + "/tasks"))
+                                .path("data");
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                },
+                data -> data.path("summary").path("open").asInt() == 0, 10000);
+        JsonNode summary = settled.path("summary");
+        assertThat(summary.path("cancelled").asInt() + summary.path("skipped").asInt())
+                .as("未完成任务应按 CANCELLED 或 SKIPPED 收口: %s", summary).isGreaterThanOrEqualTo(1);
+        List<String> taskStatuses = settled.path("records").findValuesAsText("status");
+        assertThat(taskStatuses)
+                .as("任务明细里应出现 CANCELLED 或 SKIPPED: %s", taskStatuses)
+                .anyMatch(s -> "CANCELLED".equals(s) || "SKIPPED".equals(s));
         JsonNode gate = createGate(runId);
         assertThat(gate.path("data").path("decision").asText()).isEqualTo("BLOCKED");
     }
