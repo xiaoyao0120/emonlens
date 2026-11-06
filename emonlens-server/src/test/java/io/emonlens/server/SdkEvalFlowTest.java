@@ -258,6 +258,66 @@ class SdkEvalFlowTest extends AbstractIntegrationTest {
         assertThat(gate.path("data").path("checks").toString()).contains("SDK_EVALUATORS");
     }
 
+    /**
+     * 多 runner 并发消费同一 run：服务端必须只接受一次、另一份判重，且计数不得翻倍。
+     * 这条语义此前只有"顺序重复提交"的覆盖，并发下的正确性没有被验证过——而它正是"要不要给 SDK
+     * 任务加租约"的判断依据：幂等已足够，租约只影响浪费的重复计算，不影响正确性。
+     */
+    @Test
+    void concurrentRunnersOnlyApplyOneResultAndDoNotDoubleCount() throws Exception {
+        String datasetId = createDataset("sdk-concurrent");
+        addItem(datasetId, "cc-q", "cc-a");
+        String evaluatorId = createEvaluator("sdk-concurrent-check", "SDK", Map.of(
+                "type", "SDK",
+                "requiredFields", List.of("input", "candidate_output"),
+                "scorerRef", "scorers.py:concurrent_check"));
+        String token = openToken("eval:run,eval:read,eval:content,score:read");
+
+        String runId = submitRun(datasetId, List.of(evaluatorId), token, "sdk-cc-1")
+                .path("data").path("runId").asText();
+        awaitTerminal(runId);
+        JsonNode tasks = openGet("/api/v1/open/eval-runs/" + runId + "/sdk-tasks", token);
+        String itemId = tasks.path("data").path("records").get(0).path("itemId").asText();
+        Map<String, Object> payload = Map.of("results", List.of(Map.of(
+                "itemId", itemId, "evaluatorKey", "sdk-concurrent-check",
+                "verdict", "PASS", "score", 0.9, "reasonCode", "MATCHED")));
+
+        // 两个"runner"用不同幂等键同时提交同一条结果；线程池起 2 个，等齐后一起看结果。
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        java.util.List<java.util.concurrent.Future<JsonNode>> futures = new java.util.ArrayList<>();
+        for (int n = 0; n < 2; n++) {
+            final int idx = n;
+            futures.add(pool.submit(() -> {
+                go.await();
+                return openPost("/api/v1/open/eval-runs/" + runId + "/results", token,
+                        "sdk-cc-push-" + idx, payload);
+            }));
+        }
+        go.countDown();
+        java.util.List<String> outcomes = new java.util.ArrayList<>();
+        for (java.util.concurrent.Future<JsonNode> f : futures) {
+            JsonNode resp = f.get(60, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(resp.path("code").asInt()).as("push: %s", resp).isZero();
+            outcomes.add(resp.path("data").path("results").get(0).path("outcome").asText());
+        }
+        pool.shutdown();
+
+        // 恰好一个 applied、一个 duplicate（顺序不保证，只断言集合）
+        assertThat(outcomes).as("并发回写的结果集合: %s", outcomes)
+                .containsExactlyInAnyOrder("APPLIED", "DUPLICATE");
+
+        // 计数不得翻倍：一条样本、一次成功，覆盖率按 1/1 算
+        JsonNode after = openGet("/api/v1/open/eval-runs/" + runId, token);
+        JsonNode run = after.path("data").path("run");
+        assertThat(run.path("passCount").asInt()).as("并发回写后计数不得翻倍: %s", run).isEqualTo(1);
+        assertThat(run.path("unknownCount").asInt()).as("占位应被翻正: %s", run).isZero();
+        JsonNode gate = openPost("/api/v1/open/quality-gates", token, "sdk-cc-gate",
+                Map.of("runId", runId));
+        assertThat(gate.path("data").path("decision").asText())
+                .as("回写后 Gate 应放行: %s", gate).isEqualTo("PASS");
+    }
+
     @Test
     void gateBlockedUntilSdkResultsArrive() throws Exception {
         String datasetId = createDataset("sdk-gate-block");
