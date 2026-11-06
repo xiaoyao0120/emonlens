@@ -364,6 +364,30 @@ def verify_dataset(tid, evaluator_id):
         code, j = req("GET", f"/api/v1/datasets/{ds_id}/runs/{run_id}", token=TOKEN)
         d2 = (data_of(j) or {}).get("run") or {}
         check("dataset", "回归结果可查（itemCount ≥1）", ok(j) and (d2.get("itemCount") or 0) >= 1, d2)
+    # 散点必须带通过率的 95% 置信区间：小样本的 100% 与大批量的 100% 可信度不同，
+    # 只给点值会让报表读者过度相信 n 很小的结果。
+    scatter_points = []
+    for _ in range(10):
+        code, j = req("GET", f"/api/v1/datasets/{ds_id}/runs/scatter?windowDays=7", token=TOKEN)
+        scatter_points = (data_of(j) or {}).get("points") or []
+        if scatter_points:
+            break
+        time.sleep(1)
+    ci_ok = bool(scatter_points)
+    for p in scatter_points:
+        if "passRateLow" not in p or "passRateHigh" not in p or "judgedCount" not in p:
+            ci_ok = False
+            break
+        low, high, rate, judged = p.get("passRateLow"), p.get("passRateHigh"), p.get("passRate"), p.get("judgedCount") or 0
+        if not judged:
+            continue
+        if low is None or high is None or rate is None:
+            ci_ok = False
+            break
+        if not (0 <= low <= rate + 0.05 and rate - 0.05 <= high <= 100):
+            ci_ok = False
+            break
+    check("dataset", "散点通过率带 95% 置信区间（Wilson）", ci_ok, scatter_points[:2] or "无散点")
     item_id = (items[0] or {}).get("id") if items else None
     if item_id:
         code, j = req("DELETE", f"/api/v1/datasets/{ds_id}/items/{item_id}", token=TOKEN)
@@ -441,13 +465,13 @@ def verify_matrix_and_prompt_binding():
 
     # 未确认成本必须拒绝受理
     code, j = req("POST", "/api/v1/playground/matrices", estimate_body, token=TOKEN,
-                  idempotency="e2e-matrix-guard")
+                  idempotency="e2e-matrix-guard-" + uuid.uuid4().hex[:8])
     check("matrix", "未确认成本时拒绝受理", not ok(j), j.get("message"))
 
     # 确认后受理（真实调用 LLM，失败也应留下可读状态）
     accepted_body = dict(estimate_body, confirmEstimate=True)
     code, j = req("POST", "/api/v1/playground/matrices", accepted_body, token=TOKEN,
-                  idempotency="e2e-matrix-run")
+                  idempotency="e2e-matrix-run-" + uuid.uuid4().hex[:8])
     matrix_id = (data_of(j) or {}).get("id") or ""
     check("matrix", "矩阵受理（confirmEstimate=true）", bool(matrix_id), j)
 
