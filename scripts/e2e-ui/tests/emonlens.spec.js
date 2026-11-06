@@ -416,7 +416,7 @@ test.describe.serial('EmonLens 页面操作（模型链路）', () => {
 
   test('矩阵实验提交并跑到出结果（真实调用假端点）', async ({ page }) => {
     const errors = collectConsoleErrors(page);
-    // 用模型链路里建好的数据集（含 1 条 trace 样本）
+    // 用模型链路里建好的数据集（含 1 条 trace 样本）；矩阵需要该数据集里的评估器，所以不能兜底自建
     expect(sharedDatasetId, '依赖前面用例创建的数据集').toBeTruthy();
     await login(page);
     await page.goto(`/matrix?datasetId=${sharedDatasetId}`);
@@ -598,6 +598,40 @@ test.describe.serial('EmonLens 页面操作（模型链路）', () => {
     await expect(page.locator('body')).toContainText('fake-llm-ok', { timeout: 60_000 });
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
+
+  test('试跑页可按版本从提示词库填充（版本对比的入口）', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const auth = { Authorization: `Bearer ${token}` };
+    const promptName = `e2e-pg-${Date.now().toString(36)}`;
+    // 同名两次 = v1 / v2；不显式选版本时 fillFromPrompt 会回退到第一条，所以要专门选 v2 才能验证版本生效
+    for (const text of ['v1 内容：{{question}}', 'v2 内容：{{question}}']) {
+      const r = await (
+        await ctx.post('/api/v1/prompts', {
+          headers: auth,
+          data: { name: promptName, prompt: text, config: { model: 'fake-model' } },
+        })
+      ).json();
+      expect(r.code, JSON.stringify(r)).toBe(0);
+    }
+
+    await login(page);
+    await page.goto('/playground');
+    // n-select 的 placeholder 在 .n-base-selection 里，不是 input 的 placeholder 属性
+    await page.locator('.n-base-selection').filter({ hasText: '从提示词库填充' }).first()
+      .click({ timeout: 15_000 });
+    await page.locator('.n-base-select-option:visible').filter({ hasText: promptName }).first()
+      .click({ timeout: 10_000 });
+    await page.locator('.n-base-selection').filter({ hasText: '版本' }).last().click({ timeout: 10_000 });
+    await page.locator('.n-base-select-option:visible').filter({ hasText: /^v2$/ }).first()
+      .click({ timeout: 10_000 });
+    await page.getByRole('button', { name: '填充', exact: true }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已填充/, { timeout: 30_000 });
+    // 正文必须换成 v2 的内容，而不是回退到第一条
+    // class="mono" 在 n-input 的包裹层上，不在 <textarea> 本身
+    await expect(page.locator('.mono textarea').first()).toHaveValue(/v2 内容/);
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
 });
 // ---------------------------------------------------------------------------
 // 系统设置里的"签发的凭据真的能用"与"资产发布"链路。
@@ -742,7 +776,18 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
   test('发布领域包并绑定到数据集', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     const packKey = `e2e-bind-${RUN_STAMP}-${Date.now().toString(36)}`;
-    expect(sharedDatasetId, '依赖前面用例创建的数据集').toBeTruthy();
+    // 不硬依赖前面用例：serial 重试会在新 worker 里重跑，模块级变量会丢，这里兜底自建一个数据集
+    let bindDatasetId = sharedDatasetId;
+    if (!bindDatasetId) {
+      const created = await (
+        await ctx.post('/api/v1/datasets', {
+          headers: { Authorization: `Bearer ${token}` },
+          data: { datasetKey: `e2e-bind-ds-${Date.now().toString(36)}` },
+        })
+      ).json();
+      bindDatasetId = created?.data?.id;
+    }
+    expect(bindDatasetId, '绑定用例需要数据集').toBeTruthy();
 
     await login(page);
     // 1) 发布一个领域包（manifest 用弹窗预填的合法模板）
@@ -755,7 +800,7 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     await expect(page.locator('.n-message').last()).toContainText(/已发布/, { timeout: 30_000 });
 
     // 2) 到数据集里绑定它
-    await page.goto(`/datasets/${sharedDatasetId}`);
+    await page.goto(`/datasets/${bindDatasetId}`);
     await expect(page.locator('.base-page').first()).toBeVisible({ timeout: 30_000 });
     // 「绑定领域包」在「样本与设置」页签里，不是默认页签
     const dataTab = page.locator('.n-tabs-tab').filter({ hasText: '样本与设置' }).first();
@@ -783,7 +828,7 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     // 4) API 侧确认绑定落库
     const auth = { Authorization: `Bearer ${token}` };
     const health = await (
-      await ctx.get(`/api/v1/datasets/${sharedDatasetId}/health`, { headers: auth })
+      await ctx.get(`/api/v1/datasets/${bindDatasetId}/health`, { headers: auth })
     ).json();
     expect(health?.data?.domainPackId, `绑定应写回 dataset: ${JSON.stringify(health?.data || {})}`).toBeTruthy();
 
