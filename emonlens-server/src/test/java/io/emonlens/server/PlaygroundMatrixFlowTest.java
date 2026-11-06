@@ -331,6 +331,9 @@ class PlaygroundMatrixFlowTest extends AbstractIntegrationTest {
         awaitMatrix(matrixId);
 
         // 两个方向都选 B（目标列）→ IMPROVEMENT，且评估结论同时变好
+        // pairwiseOutputs 跨用例共享：若上个用例留下奇数条残留，两次方向调用会取到反序脚本
+        // （AB 拿到 "A"、BA 拿到 "B"），两次都判成 base 更好 → improvedCount 变 0。先从空队列开始。
+        fakeLlm.pairwiseOutputs.clear();
         fakeLlm.pairwiseOutputs.add("{\"winner\":\"B\",\"confidence\":0.9,\"reason\":\"x\"}");
         fakeLlm.pairwiseOutputs.add("{\"winner\":\"A\",\"confidence\":0.9,\"reason\":\"x\"}");
         JsonNode improved = readTree(postApi("/api/v1/playground/matrices/" + matrixId + "/diff",
@@ -348,6 +351,9 @@ class PlaygroundMatrixFlowTest extends AbstractIntegrationTest {
         assertThat(detail.path("data").path("items")).hasSize(1);
 
         // 反向比较：语义偏好判目标列更好，但评估结论从 PASS 变 FAIL → TRADEOFF
+        // pairwiseOutputs 跨用例共享：若上个用例留下奇数条残留，两次方向调用会取到反序脚本
+        // （AB 拿到 "A"、BA 拿到 "B"），两次都判成 base 更好 → improvedCount 变 0。先从空队列开始。
+        fakeLlm.pairwiseOutputs.clear();
         fakeLlm.pairwiseOutputs.add("{\"winner\":\"B\",\"confidence\":0.9,\"reason\":\"x\"}");
         fakeLlm.pairwiseOutputs.add("{\"winner\":\"A\",\"confidence\":0.9,\"reason\":\"x\"}");
         JsonNode tradeoff = readTree(postApi("/api/v1/playground/matrices/" + matrixId + "/diff",
