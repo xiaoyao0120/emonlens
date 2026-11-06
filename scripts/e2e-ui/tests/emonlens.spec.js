@@ -309,6 +309,48 @@ test.describe.serial('EmonLens 页面操作', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
+  test('会话详情：统计卡与调用时间线，点条目跳到 Trace', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const stamp = Date.now().toString(36);
+    const sessionId = `ui-e2e-sess-${stamp}`;
+    const t1 = `ui-e2e-s1-a-${stamp}`;
+    const t2 = `ui-e2e-s1-b-${stamp}`;
+    const post = (spans) =>
+      ctx.post('/api/v1/ingest/events', { headers: { 'X-Trust-Key': INGEST_KEY }, data: spans });
+    // 同一会话两次调用：会话详情要能把它们串成时间线
+    for (const [traceId, offset] of [[t1, -8], [t2, -4]]) {
+      await post([
+        {
+          traceId, spanId: 'root', agentKey: AGENT, agentVersion: 'v1', spanType: 'agent',
+          spanName: 'invoke_agent', sessionId, startTime: localDateTime(offset),
+          endTime: localDateTime(offset + 1), input: `会话输入 ${traceId}`, output: '会话输出',
+          modelName: 'fake-model', inputTokens: 100, outputTokens: 20,
+        },
+      ]);
+    }
+    await waitTrace(ctx, token, t1);
+    await waitTrace(ctx, token, t2);
+
+    await login(page);
+    await page.goto(`/sessions/${sessionId}`);
+    // 标题优先显示会话名（由首条输入推导），没有 name 才退回 sessionId——这里断言两者之一即可
+    await expect(page.locator('.page-title')).toContainText(/会话输入|ui-e2e-sess-/, { timeout: 30_000 });
+    // 统计卡：两次调用、无错误
+    const stats = page.locator('.stat-row');
+    await expect(stats).toContainText('调用', { timeout: 30_000 });
+    await expect(stats).toContainText('Tokens');
+    await expect(stats).toContainText('用户');
+    // 时间线两条
+    const items = page.locator('.tl-item');
+    await expect(items.first()).toBeVisible({ timeout: 30_000 });
+    expect(await items.count(), '两个 trace 应出现两条时间线条目').toBe(2);
+    // 点条目跳到 Trace 详情
+    await items.first().click();
+    await expect(page).toHaveURL(/\/traces\//, { timeout: 30_000 });
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
   test('矩阵实验与告警页可正常打开', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     await login(page);
@@ -744,6 +786,42 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
       await ctx.get(`/api/v1/datasets/${sharedDatasetId}/health`, { headers: auth })
     ).json();
     expect(health?.data?.domainPackId, `绑定应写回 dataset: ${JSON.stringify(health?.data || {})}`).toBeTruthy();
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('用户与角色：成员列表可读，能建角色并删除', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const stamp = Date.now().toString(36);
+    const roleName = `e2e-role-${stamp}`;
+    await login(page);
+    await page.goto('/sys/users');
+
+    // 成员页：内置 admin 必须在（说明用户列表真的拉到了）
+    const rows = page.locator('.n-data-table-tbody .n-data-table-tr');
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('body')).toContainText('admin');
+
+    // 新建用户弹窗能打开并含必填项（写操作留到最后，避免污染其他用例）
+    await page.getByRole('button', { name: /新建用户/ }).click();
+    // 注意：项目的 Modal 组件实际渲染成右侧 n-drawer，不是 .n-modal
+    await expect(page.locator('.n-drawer').last()).toContainText('初始密码', { timeout: 15_000 });
+    await page.locator('.n-drawer').last().getByRole('button', { name: '取消' }).click();
+
+    // 角色权限页：建一个自定义角色，再删掉（清干净，不给实例留垃圾）
+    await page.locator('.n-tabs-tab').filter({ hasText: '角色权限' }).first().click({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /新建角色/ })).toBeVisible({ timeout: 30_000 });
+    await page.getByRole('button', { name: /新建角色/ }).click();
+    await page.getByPlaceholder(/如 数据分析只读/).fill(roleName);
+    await page.locator('.n-drawer').last().getByRole('button', { name: '创建' }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已创建/, { timeout: 30_000 });
+
+    const roleRow = page.locator('.n-data-table-tbody .n-data-table-tr').filter({ hasText: roleName }).first();
+    await expect(roleRow).toBeVisible({ timeout: 30_000 });
+    await roleRow.getByRole('button', { name: '删除' }).click();
+    await page.locator('.n-popconfirm .n-button').filter({ hasText: '确认' }).first().click({ timeout: 10_000 });
+    await expect(page.locator('.n-message').last()).toContainText(/已删除/, { timeout: 30_000 });
+    await expect(page.locator('.n-data-table-tbody')).not.toContainText(roleName, { timeout: 30_000 });
 
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
