@@ -14,20 +14,26 @@
       </div>
       <div class="page-hint">
         排行口径：加权通过率 = 平均通过率 × 平均覆盖率；覆盖率低于阈值（默认 90%）的候选显式标「降权」并排在后面。
-        散点横轴成本、纵轴通过率，点数按样本数。
+        散点可自选横/纵轴（成本、通过率、覆盖率、延迟、未判定占比），点数按样本数。
       </div>
     </div>
 
-    <n-card size="small" title="分数 × 成本散点">
+    <n-card size="small" :title="`${METRICS[axisY].label} × ${METRICS[axisX].label} 散点`">
       <template #header-extra>
-        <span class="page-sub">共 {{ points.length }} 个 run（已过滤 {{ filteredOut }} 个）</span>
+        <div class="axis-pickers">
+          <span class="page-sub">横轴</span>
+          <n-select v-model:value="axisX" size="small" style="width: 128px" :options="axisOptions" />
+          <span class="page-sub">纵轴</span>
+          <n-select v-model:value="axisY" size="small" style="width: 128px" :options="axisOptions" />
+          <span class="page-sub">共 {{ points.length }} 个 run（已过滤 {{ filteredOut }} 个）</span>
+        </div>
       </template>
       <div v-if="points.length" class="chart-wrap">
         <svg :width="chartWidth" :height="chartHeight" class="chart">
           <line :x1="pad" :y1="chartHeight - pad" :x2="chartWidth - pad" :y2="chartHeight - pad" class="axis" />
           <line :x1="pad" :y1="pad" :x2="pad" :y2="chartHeight - pad" class="axis" />
-          <text :x="chartWidth - pad" :y="chartHeight - pad + 16" class="tick" text-anchor="end">成本</text>
-          <text :x="pad - 6" :y="pad - 6" class="tick" text-anchor="start">通过率 %</text>
+          <text :x="chartWidth - pad" :y="chartHeight - pad + 16" class="tick" text-anchor="end">{{ METRICS[axisX].label }}</text>
+          <text :x="pad - 6" :y="pad - 6" class="tick" text-anchor="start">{{ METRICS[axisY].label }}</text>
           <circle v-for="(p, i) in points" :key="i" :cx="cx(p)" :cy="cy(p)" :r="radius(p)"
             :class="p.priced ? 'dot' : 'dot unpriced'">
             <title>{{ tip(p) }}</title>
@@ -78,11 +84,6 @@ const windowOptions = [
 ]
 const datasetOptions = computed(() => datasets.value.map((d) => ({ label: d.datasetKey, value: d.id })))
 
-const maxCost = computed(() => {
-  const values = points.value.map((p) => (p.cost == null ? 0 : Number(p.cost)))
-  const max = Math.max(0.0001, ...values)
-  return max
-})
 // run 的计数列可能缺失（历史 run / 未 enrich），一律按 0 兜底——否则半径会算成 NaN，
 // 圆点渲染不出来（这个 bug 就是页面 E2E 抓到的）
 function itemCount(p) {
@@ -90,13 +91,37 @@ function itemCount(p) {
 }
 const maxItems = computed(() => Math.max(1, ...points.value.map(itemCount)))
 
+// 散点轴：后端 scatter 已经把这些指标都返回了，之前只是写死"成本 × 通过率"。
+// 每个指标给出取值与展示格式；坏数据一律兜底成 0，避免坐标算成 NaN（NaN 会让圆点直接不渲染）。
+const METRICS = {
+  cost: { label: '成本 $', value: (p) => (p.cost == null ? 0 : Number(p.cost) || 0), fmt: (v) => v.toFixed(4) },
+  passRate: { label: '通过率 %', value: (p) => (p.passRate == null ? 0 : Number(p.passRate) || 0), fmt: (v) => v.toFixed(0) + '%' },
+  coverage: { label: '覆盖率 %', value: (p) => (p.coverage == null ? 0 : Number(p.coverage) || 0), fmt: (v) => v.toFixed(0) + '%' },
+  latency: { label: '平均延迟 ms', value: (p) => (p.avgLatencyMs == null ? 0 : Number(p.avgLatencyMs) || 0), fmt: (v) => v.toFixed(0) + 'ms' },
+  unknownRate: {
+    label: '未判定占比 %',
+    value: (p) => {
+      const n = itemCount(p)
+      return n ? ((Number(p.unknownCount) || 0) * 100) / n : 0
+    },
+    fmt: (v) => v.toFixed(1) + '%'
+  }
+}
+const axisX = ref('cost')
+const axisY = ref('passRate')
+const axisOptions = Object.entries(METRICS).map(([value, m]) => ({ label: m.label, value }))
+function axisMax(key, pointsList) {
+  const max = Math.max(0, ...pointsList.map((p) => METRICS[key].value(p)))
+  return max > 0 ? max : 1
+}
+const maxX = computed(() => axisMax(axisX.value, points.value))
+const maxY = computed(() => axisMax(axisY.value, points.value))
+
 function cx(p) {
-  const cost = p.cost == null ? 0 : Number(p.cost)
-  return pad + (chartWidth - pad * 2) * (cost / maxCost.value)
+  return pad + (chartWidth - pad * 2) * (METRICS[axisX.value].value(p) / maxX.value)
 }
 function cy(p) {
-  const rate = p.passRate == null ? 0 : Number(p.passRate)
-  return chartHeight - pad - (chartHeight - pad * 2) * (rate / 100)
+  return chartHeight - pad - (chartHeight - pad * 2) * (METRICS[axisY.value].value(p) / maxY.value)
 }
 function radius(p) {
   return 4 + 8 * Math.sqrt(itemCount(p) / maxItems.value)
@@ -107,14 +132,16 @@ function tip(p) {
     '通过率 ' + (p.passRate == null ? '—' : p.passRate + '%'),
     '覆盖 ' + (p.coverage == null ? '—' : p.coverage + '%'),
     '成本 ' + (p.priced ? Number(p.cost ?? 0).toFixed(4) : '不可计价'),
-    '延迟 ' + (p.avgLatencyMs == null ? '—' : p.avgLatencyMs + 'ms')
+    '延迟 ' + (p.avgLatencyMs == null ? '—' : p.avgLatencyMs + 'ms'),
+    '未判定 ' + (itemCount(p) ? (((Number(p.unknownCount) || 0) * 100) / itemCount(p)).toFixed(1) + '%' : '—')
   ]
   return parts.join(' · ')
 }
 
 const columns = [
   { title: '#', key: 'rank', width: 46, render: (r, index) => h('span', { class: 'mono' }, String(index + 1)) },
-  { title: '候选', key: 'candidate', minWidth: 160,
+  // 候选是长指纹：没有 ellipsis 会溢到右边的「重复」列上（截图里能直接看到压字）
+  { title: '候选', key: 'candidate', minWidth: 160, ellipsis: { tooltip: true },
     render: (r) => h('span', { class: 'mono' }, r.candidate || '—') },
   { title: '重复', key: 'runs', width: 70, align: 'right',
     render: (r) => h('span', { class: 'num' }, String(r.runs)) },
@@ -184,6 +211,7 @@ watch(datasetId, (value) => {
 .num { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
 .page-sub { font-size: 11.5px; color: var(--text-muted); }
 .page-hint { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; line-height: 1.6; }
+.axis-pickers { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .chart-wrap { display: flex; flex-direction: column; gap: 8px; }
 .chart { background: var(--bg-subtle); border-radius: 6px; }
 .axis { stroke: var(--border); stroke-width: 1; }

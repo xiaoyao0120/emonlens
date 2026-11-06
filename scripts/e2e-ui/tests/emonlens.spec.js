@@ -240,6 +240,26 @@ test.describe.serial('EmonLens 页面操作', () => {
       expect(Number.isNaN(Number(g.cy)), `circle cy=${g.cy} 不能是 NaN`).toBe(false);
     }
     await expect(page.locator('.n-data-table-tr').filter({ hasText: '%' }).first()).toBeVisible();
+
+    // 散点轴可切换：换成「平均延迟 × 覆盖率」后坐标仍不能出现 NaN（换轴最容易漏兜底）
+    const axisSelects = page.locator('.axis-pickers .n-base-selection');
+    await axisSelects.nth(0).click({ timeout: 10_000 });
+    await page.locator('.n-base-select-option:visible').filter({ hasText: '平均延迟 ms' }).first()
+      .click({ timeout: 10_000 });
+    await axisSelects.nth(1).click({ timeout: 10_000 });
+    await page.locator('.n-base-select-option:visible').filter({ hasText: '覆盖率 %' }).first()
+      .click({ timeout: 10_000 });
+    await expect(page.locator('svg.chart circle').first()).toBeVisible({ timeout: 30_000 });
+    const switched = await page.locator('svg.chart circle').evaluateAll((nodes) =>
+      nodes.map((n) => ({ r: n.getAttribute('r'), cx: n.getAttribute('cx'), cy: n.getAttribute('cy') })),
+    );
+    expect(switched.length, '换轴后仍应有散点').toBeGreaterThan(0);
+    for (const g of switched) {
+      expect(Number.isNaN(Number(g.r)), `换轴后 r=${g.r} 不能是 NaN`).toBe(false);
+      expect(Number.isNaN(Number(g.cx)), `换轴后 cx=${g.cx} 不能是 NaN`).toBe(false);
+      expect(Number.isNaN(Number(g.cy)), `换轴后 cy=${g.cy} 不能是 NaN`).toBe(false);
+    }
+
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
