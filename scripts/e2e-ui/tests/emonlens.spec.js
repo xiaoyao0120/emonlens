@@ -826,6 +826,63 @@ test.describe.serial('EmonLens 页面操作（设置与资产）', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
+  test('模型价格：新增后出现在列表（缓存价按 10% 回退），删除后消失', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const model = `e2e-model-${Date.now().toString(36)}`;
+    await login(page);
+    await page.goto('/models');
+    await expect(page.getByRole('button', { name: /新增模型/ })).toBeVisible({ timeout: 30_000 });
+    await page.getByRole('button', { name: /新增模型/ }).click();
+    await page.getByPlaceholder(/如 gpt-4o-mini/).fill(model);
+    // 三个 n-input-number 依次是 输入价 / 输出价 / 缓存命中价；缓存留空以验证 10% 回退口径
+    const nums = page.locator('.n-drawer .n-input-number input');
+    await nums.nth(0).fill('0.5');
+    await nums.nth(1).fill('1.5');
+    await page.locator('.n-drawer').getByRole('button', { name: '保存', exact: true }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已保存/, { timeout: 30_000 });
+
+    const row = page.locator('.n-data-table-tbody .n-data-table-tr').filter({ hasText: model }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    // 未配置缓存价时按输入价 10% 展示：这条口径容易回退，专门断言
+    await expect(row).toContainText('0.0500');
+
+    // 自清理：删掉刚建的价目，不给实例留脏数据
+    await row.getByRole('button', { name: '删除' }).click();
+    await page.locator('.n-popconfirm .n-button').filter({ hasText: '确认' }).first().click({ timeout: 10_000 });
+    await expect(page.locator('.n-message').last()).toContainText(/已删除/, { timeout: 30_000 });
+    // 删完可能整表都空（tbody 不再渲染），所以断言"这一行没了"，而不是断言 tbody 不含文本
+    await expect(row).toHaveCount(0, { timeout: 30_000 });
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('智能体接入：签发 Ingest Key 后可见，吊销后状态变更', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    const keyName = `e2e-key-${Date.now().toString(36)}`;
+    await login(page);
+    await page.goto('/agents');
+    const keysTab = page.locator('.n-tabs-tab').filter({ hasText: 'Ingest Keys' }).first();
+    await expect(keysTab).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.n-tabs-tab').filter({ hasText: '接入方式' }).first()).toBeVisible();
+    await keysTab.click({ timeout: 10_000 });
+
+    await page.getByRole('button', { name: /签发 Key/ }).click();
+    await page.getByPlaceholder(/如 prod-ingest/).fill(keyName);
+    await page.locator('.n-drawer').last().getByRole('button', { name: '签发', exact: true }).click({ timeout: 10_000 });
+    // 明文只展示一次，这是安全约束：弹窗必须明确提示
+    await expect(page.locator('body')).toContainText(/明文仅此一次/, { timeout: 30_000 });
+    await page.getByRole('button', { name: '我已保存' }).click({ timeout: 10_000 });
+
+    const row = page.locator('.n-data-table-tbody .n-data-table-tr').filter({ hasText: keyName }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row).toContainText('启用中');
+    await row.getByRole('button', { name: '吊销' }).click();
+    await expect(page.locator('.n-message').last()).toContainText(/已吊销/, { timeout: 30_000 });
+    await expect(row).toContainText('已吊销', { timeout: 30_000 });
+
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
   test('发布领域包版本后出现在列表', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     const packKey = `e2e-pack-${RUN_STAMP}-${Date.now().toString(36)}`;
