@@ -260,6 +260,39 @@ test.describe.serial('EmonLens 页面操作', () => {
     // 纵轴要有刻度，否则跨半幅的误差线看起来像渲染错误
     await expect(page.locator('svg.chart text.tick').filter({ hasText: '100%' }).first()).toBeVisible();
 
+    // 按候选分组着色：再造一个"不同候选"的 run（换评估器 → 指纹不同 → 分组不同），
+    // 两个分组应给出两种颜色且图例列出两个名字。分组键必须与排行榜一致，否则一个说 2 组、一个说 1 个候选。
+    const auth = { Authorization: `Bearer ${token}` };
+    const ev2 = await (await ctx.post('/api/v1/evaluators', {
+      headers: auth,
+      data: {
+        evaluatorKey: `ui-e2e-group-${RUN_STAMP}`,
+        type: 'EXPRESSION',
+        spec: { type: 'EXPRESSION', passWhen: 'span_count >= 1' },
+      },
+    })).json();
+    const run2 = await (await ctx.post(`/api/v1/datasets/${datasetId}/runs/async`, {
+      headers: { ...auth, 'Idempotency-Key': `ui-e2e-group-run-${RUN_STAMP}` },
+      data: { evaluatorIds: [ev2.data.id], mode: 'TRACE', candidateLabel: 'prompt v2' },
+    })).json();
+    expect(run2.code, JSON.stringify(run2)).toBe(0);
+    for (let i = 0; i < 60; i += 1) {
+      const d = await (await ctx.get(`/api/v1/datasets/${datasetId}/runs/${run2.data.runId}`, { headers: auth })).json();
+      const st = d?.data?.run?.status;
+      if (st === 'COMPLETED' || st === 'FAILED') break;
+      await page.waitForTimeout(500);
+    }
+    await page.reload();
+    await expect(page.locator('svg.chart circle').nth(1)).toBeVisible({ timeout: 30_000 });
+    const fills = await page.locator('svg.chart circle').evaluateAll((nodes) =>
+      nodes.map((n) => n.style.fill || n.getAttribute('fill')),
+    );
+    expect(new Set(fills).size, `不同候选应有不同颜色，实际 fills=${fills.join(',')}`).toBeGreaterThan(1);
+    await expect(page.locator('.legend')).toContainText('prompt v2');
+    await expect(page.locator('.legend')).toContainText('空心 = 缺价目');
+    // 排行榜也要把两个候选分开（分组键一致性的回归守卫）
+    await expect(page.locator('.n-data-table-tr')).toHaveCount(3, { timeout: 15_000 });
+
     // 散点轴可切换：换成「平均延迟 × 覆盖率」后坐标仍不能出现 NaN（换轴最容易漏兜底）
     const axisSelects = page.locator('.axis-pickers .n-base-selection');
     await axisSelects.nth(0).click({ timeout: 10_000 });

@@ -51,13 +51,15 @@
             </g>
           </g>
           <circle v-for="(p, i) in points" :key="i" :cx="cx(p)" :cy="cy(p)" :r="radius(p)"
-            :class="p.priced ? 'dot' : 'dot unpriced'">
+            :class="p.priced ? 'dot' : 'dot unpriced'" :style="{ fill: colorOf(p), stroke: colorOf(p) }">
             <title>{{ tip(p) }}</title>
           </circle>
         </svg>
         <div class="legend">
-          <span><i class="dot-legend"></i> 已计价</span>
-          <span><i class="dot-legend unpriced"></i> 缺价目</span>
+          <span v-for="g in groups" :key="g.key" class="legend-group">
+            <i class="dot-legend" :style="{ background: g.color }"></i>{{ g.label }}
+          </span>
+          <span><i class="dot-legend ring"></i> 空心 = 缺价目</span>
           <span v-if="showCi">误差线 = 通过率 95% 置信区间（Wilson，n 为已判定条数）</span>
           <span>悬停查看 run 明细</span>
         </div>
@@ -153,6 +155,29 @@ function ciY(p, value) {
   return chartHeight - pad - (chartHeight - pad * 2) * (value / maxY.value)
 }
 const showCi = computed(() => axisY.value === 'passRate')
+// 按候选分组着色：同一候选（prompt 版本 / 模型）的点同色，才能看出"哪个变体整体更靠右上"。
+// 之前颜色被"是否计价"占用，缺价目只能靠颜色区分，反而是次要信息——现在改成空心表示缺价目。
+const PALETTE = ['#2f6fed', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2', '#65a30d', '#db2777']
+// 分组键必须和排行榜一致：后端 scatter 已经给了 repetitionGroup（= candidateFingerprint）。
+// 之前按 candidateLabel 分组，会出现"散点 2 组、排行榜 1 个候选"的自相矛盾。
+function groupOf(p) {
+  return p.repetitionGroup || p.candidateLabel || p.model || '未命名候选'
+}
+function groupLabel(p) {
+  return p.candidateLabel || p.model || String(groupOf(p)).slice(0, 8)
+}
+const groups = computed(() => {
+  const map = new Map()
+  for (const p of points.value) {
+    const key = groupOf(p)
+    if (!map.has(key)) map.set(key, groupLabel(p))
+  }
+  return [...map.entries()].map(([key, label], i) => ({ key, label, color: PALETTE[i % PALETTE.length] }))
+})
+function colorOf(p) {
+  const g = groups.value.find((x) => x.key === groupOf(p))
+  return g ? g.color : PALETTE[0]
+}
 // 纵轴刻度：5 等分，标签用当前指标自己的格式化函数（通过率带 %、成本带 4 位小数）
 const yTicks = computed(() => {
   const metric = METRICS[axisY.value]
@@ -256,10 +281,12 @@ watch(datasetId, (value) => {
 .grid { stroke: var(--border); stroke-width: 1; opacity: 0.35; stroke-dasharray: 3 3; }
 .tick { fill: var(--text-muted); font-size: 11px; }
 .dot { fill: var(--primary); opacity: 0.75; }
-.dot.unpriced { fill: var(--warn); opacity: 0.6; }
+.dot.unpriced { fill-opacity: 0.28; stroke-width: 2; stroke-dasharray: 3 2; opacity: 0.95; }
 .ci-whisker { stroke: var(--text-muted); stroke-width: 1; opacity: 0.55; }
 .ci-cap { stroke: var(--text-muted); stroke-width: 1; opacity: 0.55; }
 .legend { display: flex; gap: 16px; font-size: 11.5px; color: var(--text-muted); align-items: center; }
 .dot-legend { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--primary); margin-right: 4px; }
 .dot-legend.unpriced { background: var(--warn); }
+.dot-legend.ring { background: transparent; border: 1.5px dashed var(--text-muted); }
+.legend-group { display: inline-flex; align-items: center; }
 </style>
