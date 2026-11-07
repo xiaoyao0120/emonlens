@@ -68,6 +68,21 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.error(ErrorCode.NOT_FOUND, "接口或请求方法不存在"));
     }
 
+    /**
+     * Content-Type 不支持（例如把表单/纯文本 POST 到 JSON 接口）→ 415，而不是笼统 500。
+     * 归到 500 有两个实际后果：监控会把客户端用法错误算成服务端故障；SDK 把 5xx 当可重试，
+     * 会反复重试一个永远不可能成功的请求。
+     */
+    @ExceptionHandler(org.springframework.web.HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResult<Void>> handleMediaTypeNotSupported(
+            org.springframework.web.HttpMediaTypeNotSupportedException e) {
+        String supported = e.getSupportedMediaTypes().isEmpty() ? "application/json"
+                : e.getSupportedMediaTypes().toString();
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(ApiResult.error(ErrorCode.BAD_REQUEST,
+                        "Content-Type 不支持：" + e.getContentType() + "；请使用 " + supported));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResult<Void>> handleUnexpected(Exception e) {
         log.error("unexpected error", e);

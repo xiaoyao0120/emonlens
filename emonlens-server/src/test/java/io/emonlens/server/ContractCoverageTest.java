@@ -320,6 +320,28 @@ class ContractCoverageTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void unsupportedContentTypeIsAClientErrorNotAServerError() throws Exception {
+        // 契约：把表单/纯文本 POST 到 JSON 接口属于客户端用法错误。落成 500 有两个实际后果：
+        // 监控把用法错误算成服务端故障；SDK 把 5xx 当可重试，会反复重试一个永远不可能成功的请求。
+        MockHttpServletResponse form = mockMvc.perform(
+                        org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                                .post("/api/v1/auth/login")
+                                .contentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED)
+                                .content("username=admin"))
+                .andReturn().getResponse();
+        assertThat(form.getStatus()).as("不支持的表单 Content-Type 应返回 415").isEqualTo(415);
+        assertThat(form.getContentAsString()).contains("Content-Type");
+
+        MockHttpServletResponse plain = mockMvc.perform(
+                        org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                                .post("/api/v1/auth/login")
+                                .contentType(org.springframework.http.MediaType.TEXT_PLAIN)
+                                .content("hello"))
+                .andReturn().getResponse();
+        assertThat(plain.getStatus()).as("text/plain 同样应是 415").isEqualTo(415);
+    }
+
+    @Test
     void costEstimationDiscountsCachedInputTokens() throws Exception {
         // 用户反馈：缓存命中被按全价计费，成本虚高数倍。
         // in=1000（cached=900）/ out=20；输入 5/M、输出 2/M、缓存未配置→输入价 10% = 0.5/M
