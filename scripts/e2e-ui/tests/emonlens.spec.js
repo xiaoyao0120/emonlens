@@ -1182,3 +1182,67 @@ test.describe.serial('EmonLens 页面操作（在线评估）', () => {
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 });
+
+/**
+ * 剩余页面：这几个路由此前一条 E2E 都没有（`/usage`、`/quality`、`/business-experiments`、
+ * `/auto-rubrics`、`/quality-cases`）。本项目抓到过的 7 个真实缺陷全是「后端绿、页面坏」，
+ * 空白页面正是这类问题最容易藏的地方，所以每个都断言到"渲染出了什么"，而不是只断言能打开。
+ */
+test.describe.serial('EmonLens 页面操作（其余页面）', () => {
+  test.beforeAll(async () => {});
+
+  test('用量成本页渲染统计卡', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/usage');
+    await expect(page.locator('body')).toContainText('调用次数', { timeout: 30_000 });
+    await expect(page.locator('body')).toContainText('总成本');
+    await expect(page.locator('body')).toContainText('输入 Tokens');
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('质量总览页渲染 Gate 与数据集状态', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/quality');
+    await expect(page.locator('body')).toContainText('可用通过 Gate', { timeout: 30_000 });
+    await expect(page.locator('body')).toContainText('待处理 Gate');
+    await expect(page.locator('body')).toContainText('数据集质量状态');
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('业务实验页可从空态打开绑定弹窗', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/business-experiments');
+    const bind = page.getByRole('button', { name: /绑定实验/ }).first();
+    await expect(bind).toBeVisible({ timeout: 30_000 });
+    await bind.click();
+    // 项目的 Modal 组件实际渲染为右侧 drawer
+    await expect(page.locator('.n-drawer')).toContainText('绑定外部业务实验', { timeout: 15_000 });
+    await page.locator('.n-drawer').getByRole('button', { name: /取消/ }).first().click({ timeout: 10_000 });
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('规则候选页渲染审计入口与记录区', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/auto-rubrics');
+    await expect(page.locator('body')).toContainText('新建候选审计', { timeout: 30_000 });
+    await expect(page.locator('body')).toContainText('审计记录');
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  test('质量案例页可打开登记弹窗并可取消', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await login(page);
+    await page.goto('/quality-cases');
+    const create = page.getByRole('button', { name: /登记案例/ }).first();
+    await expect(create).toBeVisible({ timeout: 30_000 });
+    await create.click();
+    await expect(page.locator('.n-drawer')).toContainText('登记质量案例', { timeout: 15_000 });
+    await page.locator('.n-drawer').getByRole('button', { name: '取消' }).first().click({ timeout: 10_000 });
+    await expect(page.locator('.n-drawer')).toBeHidden({ timeout: 15_000 });
+    expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+});
