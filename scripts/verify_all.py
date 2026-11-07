@@ -814,6 +814,31 @@ def verify_doc_examples(tid, ev_id):
         check("feedback", "端用户反馈提交", ok(j), j)
 
 
+# ---------------------------------------------------------------- 13. 匿名访问必须被拒
+def verify_anonymous_rejected():
+    """逐个确认「没有凭据就进不来」。
+
+    动机：审计控制器时发现只有 5 个方法没有 @RequiresPermission，都属于"按设计走其它鉴权"的：
+    4 个 ingest 类接口靠 Ingest Key，2 个公开反馈接口靠不可猜的 token。这个结论不能只靠读代码，
+    所以把"拒绝匿名访问"钉成断言——将来谁漏了注解或漏了 key 校验，这里会红。
+    """
+    section("13. 匿名访问必须被拒（缺 Ingest Key / 无效反馈 token）")
+    span = [{"traceId": "e2e-anon", "spanId": "root", "agentKey": "e2e-agent",
+             "spanType": "agent", "spanName": "invoke_agent",
+             "startTime": now_iso(-5), "endTime": now_iso(-4), "status": "OK"}]
+    code, j = req("POST", "/api/v1/ingest/events", span)
+    check("auth", "ingest/events 缺 X-Trust-Key 被拒（40101）", isinstance(j, dict) and j.get("code") == 40101, j)
+
+    code, j = req("POST", "/api/v1/ingest/otlp/v1/traces", {"resourceSpans": []})
+    check("auth", "OTLP 缺 X-Trust-Key 被拒（40101）", isinstance(j, dict) and j.get("code") == 40101, j)
+
+    code, j = req("GET", "/api/v1/ingest/prompts/e2e-none/resolve?label=production")
+    check("auth", "prompt resolve 缺 X-Trust-Key 被拒（40101）", isinstance(j, dict) and j.get("code") == 40101, j)
+
+    code, j = req("GET", "/api/v1/feedback/e2e-bogus-token")
+    check("auth", "无效反馈 token 被拒（40401）", isinstance(j, dict) and j.get("code") == 40401, j)
+
+
 def cleanup(mon, ev_id, bad_tid):
     section("清理配置类资源")
     if mon and mon.get("id"):
@@ -858,6 +883,7 @@ def main():
     ev_id = verify_evaluation(tid)
     verify_dataset(tid, ev_id)
     verify_doc_examples(tid, ev_id)
+    verify_anonymous_rejected()
     verify_sdk_channel(tid)
     verify_prompt_playground()
     verify_matrix_and_prompt_binding()
