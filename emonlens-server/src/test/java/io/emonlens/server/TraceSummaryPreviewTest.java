@@ -34,7 +34,7 @@ class TraceSummaryPreviewTest extends AbstractIntegrationTest {
         spans.add(llm);
         post("/api/v1/ingest/events", spans);
 
-        JsonNode summary = awaitSummary(traceId);
+        JsonNode summary = awaitPreview(traceId);
         assertThat(summary.path("inputPreview").asText())
                 .as("summary: %s", summary)
                 .isEqualTo("工单 #1024 的处理进度是多少？");
@@ -57,7 +57,7 @@ class TraceSummaryPreviewTest extends AbstractIntegrationTest {
         spans.add(tool);
         post("/api/v1/ingest/events", spans);
 
-        JsonNode summary = awaitSummary(traceId);
+        JsonNode summary = awaitPreview(traceId);
         // 输入优先根 span（用户提示词），输出取最后一个带输出的 span，模型无则不填
         assertThat(summary.path("inputPreview").asText()).isEqualTo("修复登录页样式");
         assertThat(summary.path("outputPreview").asText()).isEqualTo("已完成修复");
@@ -89,7 +89,7 @@ class TraceSummaryPreviewTest extends AbstractIntegrationTest {
         stopBatch.add(root);
         post("/api/v1/ingest/events", stopBatch);
 
-        JsonNode summary = awaitSummary(traceId);
+        JsonNode summary = awaitPreview(traceId);
         assertThat(summary.path("inputPreview").asText()).isEqualTo("E2E:帮我核对工单进度");
         assertThat(summary.path("outputPreview").asText()).isEqualTo("工单已升级至二线团队");
         assertThat(summary.path("modelName").asText()).isEqualTo("gpt-4o-mini");
@@ -126,6 +126,40 @@ class TraceSummaryPreviewTest extends AbstractIntegrationTest {
         JsonNode detail = readTree(get("/api/v1/users/user-e2e-1/detail"));
         assertThat(detail.path("data").path("userId").asText()).isEqualTo("user-e2e-1");
         assertThat(detail.path("data").path("traceCount").asInt()).isEqualTo(1);
+    }
+
+    /**
+     * 等 preview 真正落库再断言。
+     *
+     * <p>两个 span 可能分两批装配：含 root 的那批先把 status 置为 COMPLETED，llm span 的数据到下一批才补上 preview。
+     * 这是正常的最终一致窗口，所以等待条件必须等于被断言的那个状态——只等 COMPLETED 会在高负载下偶发失败
+     * （实测全量跑时 inputPreview 取到空串，单跑必过）。</p>
+     */
+    private JsonNode awaitPreview(String traceId) throws InterruptedException {
+        String detail = await(
+                () -> {
+                    try {
+                        return get("/api/v1/traces/" + traceId);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                },
+                json -> {
+                    try {
+                        JsonNode s = readTree(json).path("data").path("summary");
+                        return "COMPLETED".equals(s.path("status").asText())
+                                && !s.path("inputPreview").asText().isEmpty()
+                                && !s.path("outputPreview").asText().isEmpty();
+                    } catch (Exception e) {
+                        return false;
+                    }
+                },
+                ASYNC_TIMEOUT_MS);
+        try {
+            return readTree(detail).path("data").path("summary");
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private JsonNode awaitSummary(String traceId) throws InterruptedException {
