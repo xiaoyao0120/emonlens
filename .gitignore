@@ -50,3 +50,5 @@ work-ledger.yaml
 .awr/
 # 台账重建时移开的旧状态（仅本地留证）
 .awr.broken-*/
+# 临时产物（日志/构建输出）：统一写到项目外的 tmp 目录（D:\tmp\emonlens），万一落下也不入库
+/.tmp*
