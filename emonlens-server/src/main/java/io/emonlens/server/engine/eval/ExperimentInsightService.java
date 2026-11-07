@@ -130,6 +130,11 @@ public class ExperimentInsightService {
             groups.computeIfAbsent(groupKey(run), k -> new ArrayList<>()).add(run);
         }
         List<Map<String, Object>> rows = new ArrayList<>();
+        // 与散点同源的问题：每个候选分组各查一次 items、再走一次成本分账（内部又查 run + items +
+        // 每个模型一次价目）。矩阵实验每列一个候选，分组数可以很大，所以这里也批量取 items 并共享价目缓存。
+        Map<String, List<DatasetRunItemEntity>> itemsByRun = runService
+                .itemsOfRuns(runs.stream().map(DatasetRunEntity::getId).collect(java.util.stream.Collectors.toList()));
+        Map<String, io.emonlens.server.storage.entity.ModelPriceEntity> priceCache = new LinkedHashMap<>();
         for (Map.Entry<String, List<DatasetRunEntity>> entry : groups.entrySet()) {
             List<DatasetRunEntity> group = entry.getValue();
             DoubleSpec passRate = stats(group.stream().map(this::passRateOf)
@@ -137,8 +142,10 @@ public class ExperimentInsightService {
             DoubleSpec coverage = stats(group.stream().map(this::coverageOf)
                     .collect(java.util.stream.Collectors.toList()));
             DatasetRunEntity sample = group.get(0);
-            List<DatasetRunItemEntity> items = runService.itemsOf(sample.getId());
-            Map<String, Object> cost = safeCost(workspaceId, datasetId, sample.getId());
+            List<DatasetRunItemEntity> items = itemsByRun.getOrDefault(sample.getId(), List.of());
+            // 成本分账会 enrich 并把计数写回 run，所以派生值必须先生成（见 costReportFor 的说明）
+            Long avgLatency = averageLatency(items);
+            Map<String, Object> cost = safeCostFor(workspaceId, sample, items, priceCache);
             double coverageValue = coverage.mean == null ? 0 : coverage.mean;
             double passRateValue = passRate.mean == null ? 0 : passRate.mean;
             // 覆盖率折扣：覆盖 100% 不打折，覆盖 50% 折半；缺覆盖率按 0 处理（不能拿"没判过"当满分）
@@ -161,7 +168,7 @@ public class ExperimentInsightService {
             row.put("adjustedPassRate", adjusted);
             row.put("cost", cost.get("cost"));
             row.put("priced", cost.get("priced"));
-            row.put("avgLatencyMs", averageLatency(items));
+            row.put("avgLatencyMs", avgLatency);
             row.put("degraded", degraded);
             row.put("degradeReason", degraded
                     ? "平均覆盖率 " + coverageValue + "% 低于阈值 " + minCoverage + "%：按覆盖率线性降权"
@@ -239,15 +246,6 @@ public class ExperimentInsightService {
             return false;
         }
         return true;
-    }
-
-    private Map<String, Object> safeCost(String workspaceId, String datasetId, String runId) {
-        try {
-            return runService.costReport(workspaceId, datasetId, runId);
-        } catch (Exception e) {
-            log.debug("cost report failed, run={}", runId, e);
-            return Map.of("cost", null, "priced", false);
-        }
     }
 
     /** 已加载 items 的成本分账；不重复查库，模型价格走请求级缓存。 */
