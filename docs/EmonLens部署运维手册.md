@@ -52,7 +52,11 @@ curl -s http://localhost:8300/actuator/health
 
 首次启动自动完成：
 
-1. MySQL 初始化执行 `emonlens-server/sql/emonlens-mysql.sql`（64 张表 + 系统种子：工作空间/RBAC/菜单/admin/通知模板，**不含演示业务数据**）。
+1. MySQL 初始化执行 `emonlens-server/sql/emonlens-mysql.sql`（一次性建好全部表，当前 74 张，附系统种子：工作空间/RBAC/菜单/admin/通知模板，**不含演示业务数据**）。
+   - **新建库只跑这一个脚本**，不要再叠加 `sql/migrations/`：迁移是给既有库升级用的，且刻意不幂等（重复列会直接报错中止）。
+   - 因此基线必须自包含当前全部 schema。改动表结构时**基线要同步改**，否则新装库会在运行期报 `Unknown column`——
+     这类问题 H2 单测发现不了（已实测：基线曾缺 `evaluator_type`、`judge_records_json`、`attachments_json`）。
+   - 基线已在真实 **MySQL 8.0.46** 上验证：脚本零报错建 74 张表，应用启动无 SQL 错误，发布门禁 125/125 连跑两次。
 2. 应用以 `prod` profile 启动，**启动门禁（SecurityGateRunner）** 校验：
    - `EMONLENS_JWT_SECRET` 非空且 ≥16 字符；
    - `EMONLENS_INGEST_KEY` 不得为 `dev-trust-key-001`（升级库中的历史 dev key 会被自动禁用）；
@@ -259,6 +263,9 @@ docker compose logs mysql # 数据库日志
 
 - **tar.gz 部署的升级**：先备份数据库；替换 `lib/emonlens-server-*.jar` 与 `docs/`；
   如版本带增量 SQL，先按迁移脚本说明执行；然后 `bin/emonlens.sh restart`。
+
+> **写新增列的迁移时注意保留字**：MySQL 8 里 `deterministic`、`groups`、`rank` 等是保留字，不加反引号建表会直接报 1064 并让整个脚本中止（H2 不会报）。
+> 曾经因此让全新部署只建到 67/74 张表。列名尽量避开保留字；确需使用时统一加反引号，并在实机 MySQL 上验一遍。
   不要只替换 jar 而跳过 schema 变更。
 
 ### 6.1 用户试点环境（V1.0 最小重构）
