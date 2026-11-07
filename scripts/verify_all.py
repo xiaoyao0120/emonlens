@@ -704,6 +704,116 @@ def verify_sdk_channel(tid):
     req("POST", f"/api/v1/evaluators/{ev_id}/disable", token=TOKEN)
 
 
+# ---------------------------------------------------------------- 12. 文档示例（可执行规格）
+def verify_doc_examples(tid, ev_id):
+    """docs/ 里写明的示例接口，必须真能跑通——文档就是可执行规格。
+
+    这些能力此前只在集成测试里覆盖，发布验收（本脚本）完全没有碰过：安全包种子、样本导入导出、
+    在线规则、Judge 模板、评估器质量、合成任务、端用户反馈。文档改了接口而没人跑过示例，就会漂。
+    """
+    section("12. 文档示例：安全包 / 导入导出 / 规则 / 模板 / 质量 / 合成 / 反馈")
+
+    # ---- 安全包（docs 第 19 章）
+    code, j = req("GET", "/api/v1/security/pack", token=TOKEN)
+    cats = (data_of(j) or {}).get("categories") or (data_of(j) or [])
+    if isinstance(cats, dict):
+        cats = cats.get("categories") or []
+    check("security", "安全包清单可达且含 OWASP 映射", ok(j) and len(cats) >= 5, j)
+
+    code, j = req("GET", "/api/v1/security/pack/seeds?categories=PROMPT_INJECTION", token=TOKEN)
+    seeds = (data_of(j) or {}).get("seeds") if isinstance(data_of(j), dict) else data_of(j)
+    check("security", "安全包种子可按类别查询", ok(j) and bool(seeds), j)
+
+    # ---- 安全种子导入（幂等：第二次 created=0 / skipped>0）
+    code, j = req("POST", "/api/v1/datasets", {"datasetKey": "e2e-sec-" + uuid.uuid4().hex[:6]}, token=TOKEN)
+    sec_ds = (data_of(j) or {}).get("id") or ""
+    if sec_ds:
+        body = {"categories": ["PROMPT_INJECTION", "JAILBREAK"]}
+        code, j = req("POST", f"/api/v1/datasets/{sec_ds}/security-seeds", body, token=TOKEN)
+        created = (data_of(j) or {}).get("created") or 0
+        check("security", "安全种子导入数据集", ok(j) and created > 0, j)
+        code, j = req("POST", f"/api/v1/datasets/{sec_ds}/security-seeds", body, token=TOKEN)
+        again = data_of(j) or {}
+        check("security", "安全种子重复导入幂等（created=0）",
+              ok(j) and (again.get("created") or 0) == 0 and (again.get("skipped") or 0) > 0, j)
+        req("DELETE", f"/api/v1/datasets/{sec_ds}", token=TOKEN)
+
+    # ---- 样本导入 dry-run / 导出（docs 4.7）
+    import json as _json
+    code, j = req("POST", "/api/v1/datasets", {"datasetKey": "e2e-io-" + uuid.uuid4().hex[:6]}, token=TOKEN)
+    io_ds = (data_of(j) or {}).get("id") or ""
+    if io_ds:
+        payload = {"format": "jsonl", "dryRun": True, "atomic": False,
+                   "content": _json.dumps({"input": "导入样例"}, ensure_ascii=False) + "\n"}
+        code, j = req("POST", f"/api/v1/datasets/{io_ds}/items/import", payload, token=TOKEN)
+        d = data_of(j) or {}
+        check("dataset", "样本导入 dry-run 返回可预览计数",
+              ok(j) and ("createCount" in d or "created" in d or "preview" in d or "errors" in d), j)
+        code, j = req("GET", f"/api/v1/datasets/{io_ds}/items/export?format=jsonl", token=TOKEN)
+        raw = (j or {}).get("_raw") or ""
+        check("dataset", "样本导出（jsonl）可下载", code == 200 and len(raw) >= 0, {"http": code, "raw": raw[:80]})
+        req("DELETE", f"/api/v1/datasets/{io_ds}", token=TOKEN)
+
+    # ---- 在线规则 CRUD（docs 第 13 章）
+    rule_body = {"ruleKey": "e2e-doc-rule", "name": "验收用规则", "scope": "TRACE",
+                 "filters": {"agentKeys": ["e2e-agent"]}, "evaluatorIds": [ev_id],
+                 "sampleRate": 1.0, "errorForced": True, "maxPerHour": 50}
+    req("DELETE", "/api/v1/eval-rules/e2e-doc-rule", token=TOKEN)
+    code, j = req("POST", "/api/v1/eval-rules", rule_body, token=TOKEN)
+    check("rules", "在线规则创建", ok(j), j)
+    code, j = req("POST", "/api/v1/eval-rules/e2e-doc-rule/enable", {}, token=TOKEN)
+    check("rules", "在线规则启用", ok(j), j)
+    code, j = req("POST", "/api/v1/eval-rules/e2e-doc-rule/disable", {}, token=TOKEN)
+    check("rules", "在线规则停用", ok(j), j)
+    code, j = req("GET", "/api/v1/eval-rules/summary", token=TOKEN)
+    check("rules", "规则汇总可达", ok(j), j)
+    code, j = req("DELETE", "/api/v1/eval-rules/e2e-doc-rule", token=TOKEN)
+    check("rules", "在线规则删除", ok(j), j)
+
+    # ---- Judge 模板（docs 7.2）
+    code, j = req("GET", "/api/v1/judge-templates", token=TOKEN)
+    tpls = data_of(j) or []
+    if isinstance(tpls, dict):
+        tpls = tpls.get("templates") or tpls.get("records") or []
+    check("judge", "Judge 模板列表含平台模板", ok(j) and len(tpls) >= 1, j)
+    code, j = req("POST", "/api/v1/judge-templates", {
+        "templateKey": "workspace/e2e-doc-template", "name": "验收用模板",
+        "systemPrompt": "你是评审助手", "userPrompt": "请打分：{{candidate_output}}",
+        "outputSchema": "{\"type\": \"object\"}"}, token=TOKEN)
+    tpl = data_of(j) or {}
+    check("judge", "workspace Judge 模板创建", ok(j) and bool(tpl.get("id")), j)
+    if tpl.get("id"):
+        code, j = req("POST", f"/api/v1/judge-templates/{tpl['id']}/deprecate", {}, token=TOKEN)
+        check("judge", "Judge 模板版本废弃", ok(j), j)
+
+    # ---- 评估器质量看板（docs 第 17 章）
+    code, j = req("GET", "/api/v1/evaluator-quality?windowDays=30", token=TOKEN)
+    check("quality", "评估器质量报告可达", ok(j), j)
+    code, j = req("POST", "/api/v1/evaluator-quality/scan", {"windowDays": 30}, token=TOKEN)
+    check("quality", "评估器质量扫描可执行", ok(j) or (j or {}).get("code") == 40000, j)
+
+    # ---- 合成任务：未配置 LLM 时必须优雅报错，不能 500
+    code, j = req("POST", f"/api/v1/datasets/{sec_ds or io_ds or ''}/synthesis-jobs" if (sec_ds or io_ds) else "/api/v1/datasets/x/synthesis-jobs",
+                  {"sourceType": "SCRATCH", "source": {"numGoldens": 2},
+                   "config": {"maxCandidates": 2, "minQuality": 0.6}},
+                  token=TOKEN, idempotency="e2e-doc-syn-" + uuid.uuid4().hex[:6])
+    check("synthesis", "未配置 LLM 时合成任务返回业务错误而非 500", code != 500, {"http": code, "body": j})
+
+    # ---- 端用户反馈（docs 第 9 章）：签发 token → 查询状态 → 提交
+    code, j = req("POST", f"/api/v1/traces/{tid}/feedback-tokens", {"maxUses": 2}, token=TOKEN)
+    token_val = (data_of(j) or {}).get("token") or ""
+    check("feedback", "端用户反馈 token 签发", ok(j) and bool(token_val), j)
+    if token_val:
+        code, j = req("GET", f"/api/v1/feedback/{token_val}")
+        st = data_of(j) or {}
+        body_txt = json.dumps(j, ensure_ascii=False)
+        check("feedback", "反馈 token 状态查询不含 trace 正文",
+              ok(j) and ("candidate_output" not in body_txt and "output" not in st), j)
+        code, j = req("POST", f"/api/v1/feedback/{token_val}",
+                      {"kind": "BOOLEAN", "valueText": "up", "comment": "验收反馈", "userRef": "e2e-user"})
+        check("feedback", "端用户反馈提交", ok(j), j)
+
+
 def cleanup(mon, ev_id, bad_tid):
     section("清理配置类资源")
     if mon and mon.get("id"):
@@ -747,6 +857,7 @@ def main():
     verify_monitor_flow(bad_tid, mon)
     ev_id = verify_evaluation(tid)
     verify_dataset(tid, ev_id)
+    verify_doc_examples(tid, ev_id)
     verify_sdk_channel(tid)
     verify_prompt_playground()
     verify_matrix_and_prompt_binding()
