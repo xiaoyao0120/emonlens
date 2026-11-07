@@ -153,6 +153,8 @@ CREATE TABLE IF NOT EXISTS et_evaluator (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 CREATE TABLE IF NOT EXISTS et_eval_result (
+    -- 多 judge 原始调用留痕（JSON 数组）：判定原因可复盘，缺列会让评估结果读取直接报 Unknown column
+    judge_records_json TEXT,
     id                VARCHAR(36)  PRIMARY KEY,
     evaluator_id      VARCHAR(36)  NOT NULL,
     evaluator_key     VARCHAR(128) NOT NULL,
@@ -590,6 +592,8 @@ CREATE TABLE IF NOT EXISTS et_dataset (
     CONSTRAINT uk_dataset UNIQUE (workspace_id, dataset_key)
 );
 CREATE TABLE IF NOT EXISTS et_dataset_item (
+    -- 多模态附件（URL 或 base64，JSON 数组）
+    attachments_json TEXT,
     id             VARCHAR(36) PRIMARY KEY,
     dataset_id     VARCHAR(36) NOT NULL,
     trace_id       VARCHAR(64),
@@ -726,6 +730,9 @@ CREATE TABLE IF NOT EXISTS et_eval_task (
     evaluator_id          VARCHAR(36) NOT NULL,
     evaluator_key         VARCHAR(128) NOT NULL,
     evaluator_version     INT NOT NULL,
+    -- 评估器类型快照：服务端执行阶段据此跳过 SDK 任务，终态收口与 Gate 检查也按类型区分
+    -- 「未执行」与「等待外部结果」。缺列会让 SDK 回写路径直接报 Unknown column。
+    evaluator_type        VARCHAR(32) NULL,
     evaluator_order       INT NOT NULL DEFAULT 0,
     evaluator_fingerprint CHAR(64),
     judge_template_key     VARCHAR(100),
@@ -1066,6 +1073,8 @@ CREATE TABLE IF NOT EXISTS et_dataset_revision (
     KEY idx_dataset_revision (workspace_id, dataset_id, revision)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 CREATE TABLE IF NOT EXISTS et_dataset_revision_item (
+    -- 多模态附件随 revision 一起冻结
+    attachments_json TEXT,
     id              VARCHAR(36) PRIMARY KEY,
     workspace_id    VARCHAR(64) NOT NULL,
     revision_id     VARCHAR(36) NOT NULL,
@@ -1343,7 +1352,7 @@ CREATE TABLE IF NOT EXISTS et_playground_diff_item (
     workspace_id    VARCHAR(64) NOT NULL,
     diff_id         VARCHAR(36) NOT NULL,
     item_id         VARCHAR(36) NOT NULL,
-    deterministic   VARCHAR(16) NOT NULL,
+    determinism   VARCHAR(16) NOT NULL,
     preference      VARCHAR(16) NOT NULL,
     reason_code     VARCHAR(64),
     reason          VARCHAR(512),

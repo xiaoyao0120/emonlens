@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS et_playground_diff_item (
     workspace_id    VARCHAR(64) NOT NULL,
     diff_id         VARCHAR(36) NOT NULL,
     item_id         VARCHAR(36) NOT NULL,
-    deterministic   VARCHAR(16) NOT NULL,
+    determinism   VARCHAR(16) NOT NULL,
     preference      VARCHAR(16) NOT NULL,
     reason_code     VARCHAR(64),
     reason          VARCHAR(512),
