@@ -1351,9 +1351,14 @@ curl -s "$HOST/api/v1/datasets/$DS/runs/scatter?windowDays=30&minCoverage=90&mod
   -H "Authorization: Bearer $JWT"
 ```
 
-返回 `points[]`：`passRate`、`coverage`、`cost`、`priced`、`avgLatencyMs`、`repetitionGroup`、`startedAt`；
+返回 `points[]`：`passRate`、`coverage`、`cost`、`priced`、`avgLatencyMs`、`repetitionGroup`、`startedAt`，
+以及**通过率的 95% 置信区间** `judgedCount` / `passRateLow` / `passRateHigh`（Wilson score，`judgedCount = passCount + failCount`）。
 `filteredOut` 是被 `minCoverage` / `model` / `candidateLabel` 过滤掉的 run 数。
 延迟取任务账本里记录的 `latencyMs`（没有记录就是 `null`，不猜）；缺模型价目时 `cost=null, priced=false`。
+
+置信区间为什么必须给：`1/1` 通过的 run 和 `30/30` 通过的 run 都是 100%，但可信程度完全不同。区间用 Wilson 而不是
+正态近似——它在样本很少时仍落在 `[0,100]` 内，不会给出负的下界，而这正是最需要提示的场景
+（`1/1` 的 95% 区间约为 `21% ~ 100%`）。
 
 ### 18.2 repetitions：同配置重跑，估方差
 
@@ -1398,7 +1403,13 @@ coverageMean < minCoverage → degraded=true（显式降权，并在 degradeReas
 - 排行榜**只读**已收口 run 的结论列（`pass_count / fail_count / unknown_count / item_count`），
   不改写任何 run 或 Gate；重复（repetition）会照常产生新的 run 与 Gate 证据。
 - 窗口默认 30 天，单次最多取 50 个 run（避免一次把大账单全算一遍）。
-- 散点为自绘 SVG：横轴成本、纵轴通过率、点面积按样本数；缺价目的点用警示色区分。
+- 散点为自绘 SVG，读取方式：
+  - **横轴/纵轴都可自选**：成本、通过率、覆盖率、平均延迟、未判定占比。
+  - 点面积按样本数；**缺价目**的点画成虚线空心环（不再占用颜色），颜色让给「按候选分组」。
+  - 纵轴取**通过率**时，每个点带一条 95% 置信区间误差线（Wilson）；悬停提示写明区间与已判定条数 `n`。
+    纵轴为其他指标时不画误差线（那几个指标不是"比例"，区间没有意义）。
+  - **分组键与 leaderboard 一致**：都用后端返回的 `repetitionGroup`（即候选指纹），所以图例里的分组数
+    与下方排行榜的候选行数永远对得上；若两处口径不一致，说明有 bug 而不是数据问题。
 
 ---
 
