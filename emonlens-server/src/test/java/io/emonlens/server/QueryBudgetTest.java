@@ -25,16 +25,23 @@ import org.springframework.context.annotation.Primary;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import io.emonlens.server.storage.entity.DatasetRunEntity;
+import io.emonlens.server.storage.entity.QualityGateEntity;
 import io.emonlens.server.storage.entity.DatasetRunItemEntity;
 import io.emonlens.server.storage.mapper.DatasetRunItemMapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
 import io.emonlens.server.storage.mapper.DatasetRunMapper;
+import io.emonlens.server.storage.mapper.QualityGateMapper;
 
 /**
- * 实验排行（散点 / leaderboard）× 查询次数预算。
+ * 查询次数预算：凡是"逐项出一点/一行"的视图，都不得随规模线性增加查询次数。
  *
- * <p>这两个视图都是"逐项出一点/一行"，最自然的写法是逐项取 items、逐项做成本分账——查询数就随规模线性增长。
- * 两个端点都曾是这样：散点 24 个 run 要 84 条语句，leaderboard 24 个候选要 81 条。本类用 MyBatis 拦截器
- * 数真实语句数，把"不得随规模增长"钉成断言，防止以后又退回 N+1。</p>
+ * <p>这类视图最自然的写法是逐项取 items、逐项做成本分账，查询数就跟着条目数走。已经出现过三次：
+ * 散点（24 个 run 84 条）、leaderboard（24 个候选 81 条）、Gate 历史（每条 Gate 重新取一次 items，
+ * 上限 50 条）。本类用 MyBatis 拦截器数真实语句数，把"不得随规模增长"钉成断言。</p>
+ *
+ * <p>断言方式是「小规模 vs 大规模的增长量」，不是绝对条数：绝对基线会被鉴权、数据集校验、连接池、
+ * 语句解析等固定开销污染（同一份代码实测 12/16/7/10），卡它等于卡错对象。</p>
  */
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:emonlens-insight-budget;MODE=MySQL;DB_CLOSE_DELAY=-1",
@@ -42,8 +49,8 @@ import io.emonlens.server.storage.mapper.DatasetRunMapper;
         "emonlens.dataset-run.poll-interval-ms=100",
         "emonlens.security.login-ip-limit-per-minute=0"})
 @AutoConfigureMockMvc
-@Import(ExperimentInsightQueryBudgetTest.CountConfig.class)
-class ExperimentInsightQueryBudgetTest extends AbstractIntegrationTest {
+@Import(QueryBudgetTest.CountConfig.class)
+class QueryBudgetTest extends AbstractIntegrationTest {
 
     /** 统计 query/update 次数；只包 Executor，避免把参数/结果集处理也计入语句数。 */
     @Intercepts({@org.apache.ibatis.plugin.Signature(
@@ -105,6 +112,8 @@ class ExperimentInsightQueryBudgetTest extends AbstractIntegrationTest {
     private DatasetRunMapper datasetRunMapper;
     @Resource
     private DatasetRunItemMapper datasetRunItemMapper;
+    @Resource
+    private QualityGateMapper gateMapper;
 
     @Test
     void scatterQueryCountDoesNotGrowWithRunCount() throws Exception {
@@ -129,14 +138,62 @@ class ExperimentInsightQueryBudgetTest extends AbstractIntegrationTest {
     }
 
     /**
+     * Gate 历史：同一 run 最多返回 50 条 Gate，每条都带 verification，而 verification 需要 items。
+     * 逐条取 items 会让这个审计端点变成 50 次查询；items 与 Gate 条数无关，取一次即可。
+     */
+    @Test
+    void gateHistoryQueryCountDoesNotGrowWithGateCount() throws Exception {
+        String datasetId = createDataset("gate-history-budget");
+        insertCompletedRun(datasetId, "gh-fp-0", "gh-cand-0");
+        String runId = datasetRunMapper.selectList(Wrappers.<DatasetRunEntity>lambdaQuery()
+                        .eq(DatasetRunEntity::getDatasetId, datasetId))
+                .stream().map(DatasetRunEntity::getId).findFirst().orElseThrow();
+        insertGates(datasetId, runId, 0, SMALL);
+        readTree(get("/api/v1/quality-gates/history?runId=" + runId)); // 预热
+        int small = measureHistory(runId, SMALL);
+        insertGates(datasetId, runId, SMALL, LARGE - SMALL);
+        int large = measureHistory(runId, LARGE);
+        assertGrowth("Gate 历史", small, SMALL, large, LARGE);
+    }
+
+    private void insertGates(String datasetId, String runId, int from, int count) {
+        for (int i = from; i < from + count; i++) {
+            QualityGateEntity gate = new QualityGateEntity();
+            gate.setId(java.util.UUID.randomUUID().toString());
+            gate.setWorkspaceId(WS);
+            gate.setRunId(runId);
+            gate.setDatasetId(datasetId);
+            gate.setPolicyKey("budget-policy");
+            gate.setPolicyVersion("1");
+            gate.setDecision(QualityGateEntity.DECISION_PASS);
+            gate.setCandidateFingerprint("gh-fp-0");
+            gate.setRunStatus(DatasetRunEntity.STATUS_COMPLETED);
+            gate.setChecksJson("[]");
+            gate.setCreatedBy("budget-test");
+            gate.setCreatedAt(LocalDateTime.now().minusSeconds(1000 - i));
+            gateMapper.insert(gate);
+        }
+    }
+
+    private int measureHistory(String runId, int expected) throws Exception {
+        CountingInterceptor counter = context.getBean(CountingInterceptor.class);
+        counter.reset();
+        JsonNode body = readTree(get("/api/v1/quality-gates/history?runId=" + runId));
+        int statements = counter.statements.get();
+        assertThat(body.path("code").asInt()).as("gate history: %s", body).isZero();
+        assertThat(body.path("data")).hasSize(expected);
+        return statements;
+    }
+
+    /**
      * 断言"增长量"，而不是一个绝对条数：绝对基线受鉴权、数据集校验、连接池等固定开销影响，会随版本漂移。
-     * 实测（批量取数之后）：4 项 → 24 项只多 3~4 条；N+1 时每多一项多约 2.5~3 条（20 项多 63 条）。
+     * 实测（批量取数之后）：4 项 → 24 项只多 3~4 条；N+1 时每多一项固定多几条（散点/leaderboard 约 3 条、Gate 历史 1 条）。
      * 容差取「新增项数的一半」——远低于线性增长，同时容得下几条固定噪声。
      */
     private void assertGrowth(String what, int small, int smallSize, int large, int largeSize) {
         String ids = String.join(" , ", context.getBean(CountingInterceptor.class).ids);
         assertThat(large)
-                .as("%s 查询数应随规模持平：%d 项时 %d 条，%d 项时 %d 条；N+1 时每多一项多约 3 条。最后一批语句：%s",
+                .as("%s 查询数应随规模持平：%d 项时 %d 条，%d 项时 %d 条；逐项查库时每多一项就多固定几条。最后一批语句：%s",
                         what, smallSize, small, largeSize, large, ids)
                 .isLessThanOrEqualTo(small + Math.max(4, (largeSize - smallSize) / 2));
     }

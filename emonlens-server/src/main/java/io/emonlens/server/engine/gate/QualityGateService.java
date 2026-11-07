@@ -193,12 +193,17 @@ public class QualityGateService {
         }
         DatasetRunEntity run = runOrNull(workspaceId, runId);
         LocalDateTime now = LocalDateTime.now();
+        // 最多 50 条 Gate，但 verification 每条都要 items。逐条取会让这个端点变成 50 次 items 查询；
+        // 同一个 run 的 items 与 Gate 条数无关，取一次复用即可。
+        java.util.List<DatasetRunItemEntity> sharedItems = run != null
+                && DatasetRunEntity.STATUS_COMPLETED.equals(run.getStatus())
+                ? datasetRunService.itemsOf(run.getId()) : null;
         java.util.List<Map<String, Object>> rows = new ArrayList<>();
         for (int i = 0; i < gates.size(); i++) {
             QualityGateEntity gate = gates.get(i);
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("gate", gate);
-            row.put("verification", verification(gate, run, i > 0, now));
+            row.put("verification", verification(gate, run, sharedItems, i > 0, now));
             rows.add(row);
         }
         return rows;
@@ -232,6 +237,15 @@ public class QualityGateService {
 
     private Map<String, Object> verification(QualityGateEntity gate, DatasetRunEntity run,
                                              boolean superseded, LocalDateTime now) {
+        return verification(gate, run, null, superseded, now);
+    }
+
+    /**
+     * @param loadedItems 调用方已取好的 items（批量场景复用，避免每条 Gate 重新查一次）；null 表示自行加载。
+     */
+    private Map<String, Object> verification(QualityGateEntity gate, DatasetRunEntity run,
+                                             java.util.List<DatasetRunItemEntity> loadedItems,
+                                             boolean superseded, LocalDateTime now) {
         List<String> reasons = new ArrayList<>();
         Map<String, Object> judgeCalibration = null;
         boolean expired = gate.getValidUntil() == null || !gate.getValidUntil().isAfter(now);
@@ -263,7 +277,8 @@ public class QualityGateService {
                 reasons.add(promptExpiry);
             }
             if (DatasetRunEntity.STATUS_COMPLETED.equals(run.getStatus())) {
-                List<DatasetRunItemEntity> items = datasetRunService.itemsOf(run.getId());
+                List<DatasetRunItemEntity> items = loadedItems != null ? loadedItems
+                        : datasetRunService.itemsOf(run.getId());
                 datasetRunService.enrich(run, items, false, true);
                 List<Map<String, Object>> checks = new ArrayList<>();
                 addJudgeCalibrationCheck(checks, run, items, run.getConfigSnapshot());
