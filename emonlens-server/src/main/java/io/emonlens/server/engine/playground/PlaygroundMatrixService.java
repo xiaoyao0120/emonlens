@@ -797,7 +797,7 @@ public class PlaygroundMatrixService {
             row.setWorkspaceId(workspaceId);
             row.setItemId(itemId);
             if (a == null || b == null || a.getOutput() == null || b.getOutput() == null) {
-                row.setDeterministic(PlaygroundDiffItemEntity.DET_MISSING);
+                row.setDeterminism(PlaygroundDiffItemEntity.DET_MISSING);
                 row.setPreference(PlaygroundDiffItemEntity.PREF_UNKNOWN);
                 row.setReasonCode("OUTPUT_MISSING");
                 row.setReason("有一列没有输出（单元格失败或未执行）");
@@ -809,7 +809,7 @@ public class PlaygroundMatrixService {
             row.setScoreDeltaJson(toJson(delta));
             if (Objects.equals(a.getOutputHash(), b.getOutputHash())
                     || normalize(a.getOutput()).equals(normalize(b.getOutput()))) {
-                row.setDeterministic(PlaygroundDiffItemEntity.DET_SAME);
+                row.setDeterminism(PlaygroundDiffItemEntity.DET_SAME);
                 row.setPreference(PlaygroundDiffItemEntity.PREF_TIE);
                 row.setReasonCode("DETERMINISTIC_SAME");
                 row.setReason("两列输出一致");
@@ -818,7 +818,7 @@ public class PlaygroundMatrixService {
                 rows.add(row);
                 continue;
             }
-            row.setDeterministic(PlaygroundDiffItemEntity.DET_CHANGED);
+            row.setDeterminism(PlaygroundDiffItemEntity.DET_CHANGED);
             changed++;
             // 目标列作为候选 B：B 胜 = 改进，A 胜 = 退步
             io.emonlens.server.engine.eval.PairwiseJudge.Verdict verdict = pairwiseJudge.judge(
@@ -1382,7 +1382,7 @@ public class PlaygroundMatrixService {
     private Map<String, Object> diffItemMap(PlaygroundDiffItemEntity row) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("itemId", row.getItemId());
-        map.put("deterministic", row.getDeterministic());
+        map.put("deterministic", row.getDeterminism());
         map.put("preference", row.getPreference());
         map.put("reasonCode", row.getReasonCode());
         map.put("reason", row.getReason());

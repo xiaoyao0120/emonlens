@@ -1,7 +1,6 @@
 package io.emonlens.server.storage.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 
@@ -29,12 +28,12 @@ public class PlaygroundDiffItemEntity {
     private String diffId;
     private String itemId;
     /**
-     * 列名用 determinism 而不是 deterministic：DETERMINISTIC 是 MySQL 8 的保留字，
-     * 不加引号建表和读写都会报 1064（H2 能接受，所以本地一直没暴露）。
+     * 字段与列名都用 determinism：DETERMINISTIC 是 MySQL 8 的保留字，不加引号建表、读写、
+     * 甚至 MyBatis-Plus 自动生成的别名（`determinism AS deterministic`）都会报 1064。
+     * 只要 Java 属性名还叫 deterministic，别名就会带上它，所以属性必须一起改名。
      * 对外 JSON 键仍是 deterministic，接口契约不变。
      */
-    @TableField("determinism")
-    private String deterministic;
+    private String determinism;
     private String preference;
     private String reasonCode;
     private String reason;
