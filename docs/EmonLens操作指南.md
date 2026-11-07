@@ -230,7 +230,7 @@ token 可随时吊销，吊销立即失效。
 | 工具 | 命令 | 用途 |
 |---|---|---|
 | 冒烟（13 项） | `bash scripts/smoke.sh [BASE] [USER] [PASS]` | 发布后快速确认核心链路（健康/登录/8 个核心 API/前端产物/数据面拒绝语义） |
-| 全功能验证（101 项） | `python3 scripts/verify_all.py [BASE] [USER] [PASS]` | 逐域黑盒走查全部功能闭环（幂等可重复执行） |
+| 全功能验证 | `python3 scripts/verify_all.py [BASE] [USER] [PASS]` | 逐域黑盒走查全部功能闭环（幂等可重复执行） |
 | 容量监控 | `GET /api/v1/observations/stats`（admin JWT） | 队列水位/累计接收/丢弃/限流计数；`droppedTotal` 增长 = 处理能力不足 |
 | 备份 | `docker compose exec mysql mysqldump …` | 见部署手册 §5 |
 
