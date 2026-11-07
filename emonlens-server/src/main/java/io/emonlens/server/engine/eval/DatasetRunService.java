@@ -849,6 +849,22 @@ public class DatasetRunService {
                 .eq(DatasetRunItemEntity::getRunId, runId));
     }
 
+    /**
+     * 一次取回多个 run 的 items 并按 runId 分组：散点这类"逐 run 出一点"的视图
+     * 如果每个 run 单独查一次，查询数就随历史 run 数线性增长。
+     */
+    public Map<String, List<DatasetRunItemEntity>> itemsOfRuns(java.util.Collection<String> runIds) {
+        Map<String, List<DatasetRunItemEntity>> grouped = new LinkedHashMap<>();
+        if (runIds == null || runIds.isEmpty()) {
+            return grouped;
+        }
+        for (DatasetRunItemEntity item : datasetRunItemMapper.selectList(
+                Wrappers.<DatasetRunItemEntity>lambdaQuery().in(DatasetRunItemEntity::getRunId, runIds))) {
+            grouped.computeIfAbsent(item.getRunId(), key -> new ArrayList<>()).add(item);
+        }
+        return grouped;
+    }
+
     public DatasetRunItemEntity itemOf(String runId, String runItemId) {
         return datasetRunItemMapper.selectOne(Wrappers.<DatasetRunItemEntity>lambdaQuery()
                 .eq(DatasetRunItemEntity::getRunId, runId)
@@ -1100,6 +1116,20 @@ public class DatasetRunService {
     public Map<String, Object> costReport(String workspaceId, String datasetId, String runId) {
         DatasetRunEntity run = requireRun(workspaceId, datasetId, runId);
         List<DatasetRunItemEntity> items = itemsOf(runId);
+        return costReportFor(workspaceId, run, items, new LinkedHashMap<>());
+    }
+
+    /**
+     * 成本分账的"已加载"版本：调用方已经拿到 run 与 items（例如散点一次批量取回），
+     * 这里不再重复查库，model price 也走调用方传进来的缓存，避免每次 run 重复查同一模型价格。
+     *
+     * <p><b>注意</b>：内部会调用 {@code enrich}，而 enrich 按传入的 items 重算并用结果覆盖 run 上的
+     * 计数与 usage。所以调用方若还依赖 run 上已落库的结论（散点就是），必须在调用本方法<b>之前</b>
+     * 把需要字段取出来——历史 run 可能没有 item 行，被 enrich 一遍就会把计数清零。</p>
+     */
+    public Map<String, Object> costReportFor(String workspaceId, DatasetRunEntity run,
+            List<DatasetRunItemEntity> items,
+            Map<String, io.emonlens.server.storage.entity.ModelPriceEntity> priceCache) {
         enrich(run, items, false, true);
         Map<String, Object> usage = run.getUsageSummary() == null
                 ? Map.of() : run.getUsageSummary();
@@ -1153,10 +1183,16 @@ public class DatasetRunService {
 
         Map<String, io.emonlens.server.storage.entity.ModelPriceEntity> prices = new LinkedHashMap<>();
         for (String model : byModel.keySet()) {
-            io.emonlens.server.storage.entity.ModelPriceEntity price = modelPriceMapper.selectOne(
-                    Wrappers.<io.emonlens.server.storage.entity.ModelPriceEntity>lambdaQuery()
-                            .eq(io.emonlens.server.storage.entity.ModelPriceEntity::getWorkspaceId, workspaceId)
-                            .eq(io.emonlens.server.storage.entity.ModelPriceEntity::getModel, model));
+            io.emonlens.server.storage.entity.ModelPriceEntity price;
+            if (priceCache.containsKey(model)) {
+                price = priceCache.get(model);
+            } else {
+                price = modelPriceMapper.selectOne(
+                        Wrappers.<io.emonlens.server.storage.entity.ModelPriceEntity>lambdaQuery()
+                                .eq(io.emonlens.server.storage.entity.ModelPriceEntity::getWorkspaceId, workspaceId)
+                                .eq(io.emonlens.server.storage.entity.ModelPriceEntity::getModel, model));
+                priceCache.put(model, price);
+            }
             if (price != null) {
                 prices.put(model, price);
             }
@@ -1215,7 +1251,7 @@ public class DatasetRunService {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("runId", run.getId());
-        result.put("datasetId", datasetId);
+        result.put("datasetId", run.getDatasetId());
         result.put("status", run.getStatus());
         result.put("models", new ArrayList<>(byModel.keySet()));
         result.put("promptTokens", usage.get("promptTokens"));

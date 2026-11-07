@@ -152,7 +152,7 @@ class ExperimentInsightFlowTest extends AbstractIntegrationTest {
         JsonNode points = scatter.path("data").path("points");
         assertThat(points).hasSize(2);
         JsonNode first = points.get(0);
-        assertThat(first.has("passRate")).isTrue();
+        assertThat(first.has("passRate")).as("first point: %s", first).isTrue();
         assertThat(first.has("coverage")).isTrue();
         assertThat(first.has("priced")).isTrue();
         assertThat(first.path("repetitionGroup").asText()).isNotBlank();

@@ -57,41 +57,51 @@ public class ExperimentInsightService {
         DatasetEntity dataset = requireDataset(workspaceId, datasetId);
         List<DatasetRunEntity> runs = runsOf(workspaceId, dataset, windowDays);
         List<Map<String, Object>> points = new ArrayList<>();
+        // 批量取回所有 run 的 items 与模型价格缓存：逐 run 单查会让查询数随历史 run 数线性增长（实测 24 个 run 84 条语句）。
+        Map<String, List<DatasetRunItemEntity>> itemsByRun = runService
+                .itemsOfRuns(runs.stream().map(DatasetRunEntity::getId).collect(java.util.stream.Collectors.toList()));
+        Map<String, io.emonlens.server.storage.entity.ModelPriceEntity> priceCache = new LinkedHashMap<>();
         for (DatasetRunEntity run : runs) {
-            List<DatasetRunItemEntity> items = runService.itemsOf(run.getId());
-            // 结论列在 run 收口时写入；这里不再 enrich——enrich 会用「当前样本数」重算覆盖率，
-            // 与 run 报告口径可能不一致（样本后来被删/隔离时尤其明显）。
-            Map<String, Object> cost = safeCost(workspaceId, datasetId, run.getId());
+            List<DatasetRunItemEntity> items = itemsByRun.getOrDefault(run.getId(), List.of());
+            // 先把点位需要的派生值取出来：后面的成本分账会调用 enrich，而 enrich 会按 items 重算并
+            // 覆盖 run 上的计数（历史 run 可能没有 item 行，计数会被清零）。结论列以库里落库的为准。
+            boolean keep = filterMatch(run, model, candidateLabel, minCoverage);
+            Double passRate = passRateOf(run);
+            Double coverage = coverageOf(run);
+            int passCount = run.getPassCount() == null ? 0 : run.getPassCount();
+            int failCount = run.getFailCount() == null ? 0 : run.getFailCount();
+            int unknownCount = run.getUnknownCount() == null ? 0 : run.getUnknownCount();
+            String repetitionGroup = groupKey(run);
+            Long avgLatency = averageLatency(items);
+            Map<String, Object> cost = safeCostFor(workspaceId, run, items, priceCache);
             Map<String, Object> point = new LinkedHashMap<>();
             point.put("runId", run.getId());
             point.put("candidateLabel", run.getCandidateLabel());
             point.put("model", run.getModel());
             point.put("promptVersion", run.getPromptVersion());
             point.put("status", run.getStatus());
-            point.put("passed", filterMatch(run, model, candidateLabel, minCoverage) ? "KEEP" : "FILTERED");
-            point.put("passRate", passRateOf(run));
-            point.put("coverage", coverageOf(run));
+            point.put("passed", keep ? "KEEP" : "FILTERED");
+            point.put("passRate", passRate);
+            point.put("coverage", coverage);
             // 计数列可能为空（历史 run / 未 enrich）：输出 0 而不是 null，
             // 否则前端图表拿到 undefined 会把半径算成 NaN
-            point.put("passCount", run.getPassCount() == null ? 0 : run.getPassCount());
-            point.put("failCount", run.getFailCount() == null ? 0 : run.getFailCount());
-            point.put("unknownCount", run.getUnknownCount() == null ? 0 : run.getUnknownCount());
+            point.put("passCount", passCount);
+            point.put("failCount", failCount);
+            point.put("unknownCount", unknownCount);
             point.put("cost", cost.get("cost"));
             point.put("priced", cost.get("priced"));
-            point.put("avgLatencyMs", averageLatency(items));
+            point.put("avgLatencyMs", avgLatency);
             // 通过率的 95% 置信区间（Wilson）：小样本的 100% 和 30 样本的 100% 不是一回事，
             // 散点若只画点会让人过度相信 n=3 的结果。judged = pass + fail（UNKNOWN 不计入分母，
             // 与 passRateOf 的口径一致）。
-            int judged = (run.getPassCount() == null ? 0 : run.getPassCount())
-                    + (run.getFailCount() == null ? 0 : run.getFailCount());
-            int passed = run.getPassCount() == null ? 0 : run.getPassCount();
+            int judged = passCount + failCount;
             point.put("judgedCount", judged);
-            Double[] ci = wilsonInterval(passed, judged);
+            Double[] ci = wilsonInterval(passCount, judged);
             point.put("passRateLow", ci == null ? null : ci[0]);
             point.put("passRateHigh", ci == null ? null : ci[1]);
-            point.put("repetitionGroup", groupKey(run));
+            point.put("repetitionGroup", repetitionGroup);
             point.put("startedAt", run.getStartedAt());
-            if (filterMatch(run, model, candidateLabel, minCoverage)) {
+            if (keep) {
                 points.add(point);
             }
         }
@@ -236,6 +246,18 @@ public class ExperimentInsightService {
             return runService.costReport(workspaceId, datasetId, runId);
         } catch (Exception e) {
             log.debug("cost report failed, run={}", runId, e);
+            return Map.of("cost", null, "priced", false);
+        }
+    }
+
+    /** 已加载 items 的成本分账；不重复查库，模型价格走请求级缓存。 */
+    private Map<String, Object> safeCostFor(String workspaceId, DatasetRunEntity run,
+                                            List<DatasetRunItemEntity> items,
+                                            Map<String, io.emonlens.server.storage.entity.ModelPriceEntity> priceCache) {
+        try {
+            return runService.costReportFor(workspaceId, run, items, priceCache);
+        } catch (Exception e) {
+            log.debug("cost report failed, run={}", run.getId(), e);
             return Map.of("cost", null, "priced", false);
         }
     }
