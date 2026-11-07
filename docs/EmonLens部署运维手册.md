@@ -118,6 +118,7 @@ emonlens-0.1.0/
 ├── sdk/                   Python SDK wheel/sdist
 ├── scripts/smoke.sh        13 项发布冒烟
 ├── scripts/verify_all.py   全功能黑盒验证（含 SDK 评测通道与文档示例），通过数在结尾打印
+├── scripts/smoke_endpoints.py  GET 端点冒烟：逐个打一遍查 5xx，并如实标注"哪些没法验证"
 ├── docs/                  设计文档与操作手册
 ├── VERSION
 └── README.md
