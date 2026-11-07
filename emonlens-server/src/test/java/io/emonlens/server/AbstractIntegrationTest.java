@@ -37,10 +37,12 @@ public abstract class AbstractIntegrationTest {
     /**
      * 等待异步条件（装配/投递/推送）的统一预算。
      * 这些条件正常都在一秒内完成，超时值只在真的出问题时才起作用——而机器高负载
-     * （并行跑 Docker/mvn/dev server）时后台线程可能被饿死，实测 40s 仍会偶发不够。
-     * 取 60s：不影响 happy path 耗时，只是把偶发的假阴性消掉。
+     * （并行跑 Docker/mvn/dev server）时后台线程可能被饿死：实测 40s 不够，60s 也被打穿过一次
+     * （JudgeUpgradeFlowTest 在全量并发下等 ingest 收口超时，单独跑 3/3 全绿）。
+     * 取 120s：不影响 happy path 耗时（条件满足就立刻返回），把假阴性彻底消掉。
+     * <b>若 120s 仍超时，说明是真积压，应当去查 ingest 队列而不是再调这个数。</b>
      */
-    protected static final long ASYNC_TIMEOUT_MS = 60000;
+    protected static final long ASYNC_TIMEOUT_MS = 120000;
 
     @Resource
     protected MockMvc mockMvc;
