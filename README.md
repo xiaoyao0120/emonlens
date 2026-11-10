@@ -116,6 +116,7 @@ SDK 后台批量上报（2s / 100 条），业务零阻塞；网络失败指数�
 | OpenAI drop-in | `from emonlens.integrations.openai import OpenAI` | 已用 OpenAI SDK，换一行 import 即完成埋点 |
 | LangChain | `EmonLensCallbackHandler` | 现有 Chain / Agent 挂 callback |
 | CLI Agent hooks | `emonlens-codex-setup` / `emonlens-claude-setup` / `emonlens-zcode-setup` | Codex CLI / Claude Code / ZCode 一键接管，自动按轮次分组 |
+| DeepSeek Harness | `emonlens-dsh-sync` | DSH 没有钩子协议，按会话文件**回放**：一轮对话一条 trace，含工具调用与 tokens |
 | 评测 SDK / CLI | `emonlens.evaluate()` / `emonlens eval run` / `emonlens gate check` | CI 提交数据集评测、消费 Gate、非零退出码 |
 | OTLP/HTTP | `POST /api/v1/ingest/otlp/v1/traces` | 任意 OpenTelemetry Collector / 其他语言 |
 | HTTP/JSON | `POST /api/v1/ingest/events` | 自定义上报，单批 ≤ 500 span |

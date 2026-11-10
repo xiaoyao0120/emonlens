@@ -51,7 +51,7 @@ admin 种子密码 `123456` 不提供对外使用：prod 模式下若仍是该�
 
 ---
 
-## 3. Agent 接入（五选一）
+## 3. Agent 接入（六选一）
 
 | 方式 | 适用 | 最小步骤 |
 |---|---|---|
@@ -59,6 +59,7 @@ admin 种子密码 `123456` 不提供对外使用：prod 模式下若仍是该�
 | **Codex CLI** | Codex 用户 | `pip install emonlens && emonlens-codex-setup --host … --key …` |
 | **Claude Code** | Claude 用户 | `emonlens-claude-setup --host … --key …` |
 | **ZCode** | ZCode 用户 | `emonlens-zcode-setup --host … --key …`（新开会话后生效） |
+| **DeepSeek Harness** | DSH 用户 | `emonlens-dsh-sync --host … --ingest-key … --limit 3`（**回放式**，跑完会话后同步；非实时） |
 | **OTLP** | 已有 OpenTelemetry 埋点 | POST `/api/v1/ingest/otlp/v1/traces`（JSON/HTTP，带 X-Trust-Key） |
 
 **Python SDK 三步接入**（只需环境变量，无需调用 init）：
