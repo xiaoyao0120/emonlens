@@ -468,7 +468,25 @@ emonlens-zcode-setup --host http://你的EmonLens地址:8300 --key tk-你的Key
 > 配置格式差异（`hooks.events` + `enabled`）、离线验证、故障排查与卸载见
 > [`ZCode接入操作手册.md`](ZCode接入操作手册.md)（同目录）。
 
-## 8. 生产建议
+## 8. DeepSeek Harness 接入（回放式，非钩子）
+
+DSH **没有对外钩子**，它把每个会话写成本地 `~/.dsh/sessions/**/session.v4.jsonl.zstd`。所以接入方式是**回放**：
+解压会话文件、把**一轮对话转成一条 trace**，再上报。
+
+```bash
+pip install <emonlens仓库>/emonlens-sdk-python   # Python < 3.14 时另需 pip install zstandard
+emonlens-dsh-sync --host http://你的EmonLens地址:8300 --ingest-key tk-你的Key --limit 1 --dry-run
+emonlens-dsh-sync --host http://你的EmonLens地址:8300 --ingest-key tk-你的Key --limit 3
+```
+
+之后在「调用链路」看到 `agentKey=dsh` 的 trace：根 span `dsh_turn`（input=提问、output=该轮最终回答），
+子 span 是该轮的 `assistant_turn`（llm，带 tokens 与模型）和每个工具调用（tool，带真实耗时与参数/结果）。
+同一 DSH 会话的轮次按 `sessionId` 聚合，可在「会话」里回放多轮。重复同步幂等（服务端按 traceId+spanId 去重）。
+
+> 与 hooks 协议的差别（**不是实时**）、字段映射、自动化触发、隐私开关（`--no-content`）与已知限制见
+> [`DeepSeekHarness接入操作手册.md`](DeepSeekHarness接入操作手册.md)（同目录）。
+
+## 9. 生产建议
 
 | 主题 | 建议 |
 | --- | --- |
@@ -481,7 +499,7 @@ emonlens-zcode-setup --host http://你的EmonLens地址:8300 --key tk-你的Key
 
 ---
 
-## 9. 接入检查清单
+## 10. 接入检查清单
 
 - [ ] 签发 Ingest Key 并配置 `X-Trust-Key`
 - [ ] 根 span（`spanType=agent`）+ 子 span 结构正确，`parentSpanId` 挂对
