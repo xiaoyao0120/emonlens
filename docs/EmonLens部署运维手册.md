@@ -161,7 +161,55 @@ bin/emonlens.sh stop       # SIGTERM 优雅停机（刷 ingest 队列）
 | 后台线程 | `EMONLENS_WORKER_ENABLED` | 同左 |
 | 启动门禁 | prod profile 校验 | 同左（脚本在启动前先做一遍同口径校验，报错更早） |
 
-### 3.4 systemd 托管（推荐）
+### 3.4 复用既有 MySQL 实例（例如机器上已有一个共享的元数据库）
+
+Compose 会自带一个 `emonlens-mysql`。如果这台机器上已经有共享 MySQL（本文以容器 `meta-mysql` 为例），
+直接复用即可，不必再起一个库：
+
+```bash
+# 1) 建库与专用账号（不要在共享实例上用 root 跑业务）
+docker exec -e MYSQL_PWD='<root密码>' meta-mysql mysql -uroot -e "
+  CREATE DATABASE IF NOT EXISTS emonlens DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  CREATE USER IF NOT EXISTS 'emonlens'@'%' IDENTIFIED BY '<业务密码>';
+  GRANT ALL PRIVILEGES ON emonlens.* TO 'emonlens'@'%'; FLUSH PRIVILEGES;"
+
+# 2) 应用基线 schema（一次性，74 张表；见 §2 的说明：基线必须自包含）
+docker exec -i -e MYSQL_PWD='<业务密码>' meta-mysql \
+  mysql -uemonlens --default-character-set=utf8mb4 emonlens < emonlens-server/sql/emonlens-mysql.sql
+
+# 3) 起应用容器，指向该实例（网络用 meta-mysql 所在的网络）
+docker run -d --name emonlens-server --restart unless-stopped --network mysql-net -p 8300:8300 \
+  -e SPRING_DATASOURCE_URL="jdbc:mysql://meta-mysql:3306/emonlens?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true" \
+  -e SPRING_DATASOURCE_USERNAME=emonlens -e SPRING_DATASOURCE_PASSWORD='<业务密码>' \
+  -e EMONLENS_SECURITY_MODE=dev -e EMONLENS_JWT_SECRET='<固定随机串，换掉会导致已签发 token 全部失效>' \
+  -v "$PWD/emonlens-server/target/emonlens-server-0.2.0.jar:/app/app.jar:ro" \
+  maven:3.9-eclipse-temurin-17 java -jar /app/app.jar
+```
+
+首次启动较慢（要连库、建连接池、跑一次信任分兜底重算），实测本机负载较高时约 8 分钟才 `health=UP`，
+不是卡死；`docker logs -f emonlens-server` 看到 `Started EmonLensServer` 即可。
+
+### 3.5 把别处的数据迁进来
+
+| 来源 | 做法 |
+| --- | --- |
+| **另一个 MySQL 里的 emonlens 库**（老实例） | `docker exec old-mysql mysqldump -uroot -p<密码> --single-transaction --routines emonlens > emonlens.sql`，再 `docker exec -i -e MYSQL_PWD=<业务密码> meta-mysql mysql -uemonlens emonlens < emonlens.sql` |
+| **没跑过平台、但有本地 Agent 会话**（如 DeepSeek Harness） | 用 SDK 的 DSH 桥接回放：`emonlens-dsh-sync --host http://127.0.0.1:8300 --ingest-key tk-...`（一轮对话一条 trace，重放幂等） |
+| **只想搬配置**（评估器/规则/模型价格/dataset） | 优先用页面导出或 API 逐项重建；跨库直接搬表容易与 `workspace_id` 不一致 |
+
+迁完核对（应与上报数一致）：
+
+```sql
+SELECT COUNT(*) FROM et_trace_summary;                 -- trace 数
+SELECT COUNT(DISTINCT trace_id), COUNT(*) FROM et_span_event;  -- span 覆盖的 trace 数与 span 总数
+SELECT agent_key, COUNT(*) FROM et_trace_summary GROUP BY agent_key;  -- 按 Agent 分布
+```
+
+> 注意：入库是异步装配的，刚导完立刻查会偏小，等一会再查。同一 `traceId+spanId` 会被服务端去重，
+> 所以重复导入不会翻倍；反过来，如果「上报数 > 入库数」，先怀疑源数据里有重复的 span（例如同一条
+> `tool/result` 事件被记录两次），而不是丢了。
+
+### 3.6 systemd 托管（推荐）
 
 ```ini
 # /etc/systemd/system/emonlens.service
