@@ -95,9 +95,9 @@ with Trace(session_id="chat-1", user_id="u1", input="用户问题") as tr:
 
 - **检索**：顶部时间范围 + `＋ 筛选`（Agent/状态/模型/耗时/token 成本区间/标签/环境/错误有无），支持关键字搜输入输出摘要。
 - **详情**：点击行 → 右侧面板展示输入/输出全文、**瀑布时间线**（父子树、各 span 耗时、tokens）、异常发现、信任分变化。
-  - 在 Trace 详情里**点任意 span 行**，会从右侧滑出抽屉展示该 span 的 Input / Output / Metadata / Evaluation / Comments；
-    抽屉**不遮住**瀑布图（内容区自动让出宽度），所以可以一边看一个 span 一边继续点别的 span；按右上角 ✕ 关闭。
-    从「Observations」列表带 `?spanId=` 点进来时抽屉会直接打开。tokens 口径为「输入 / 输出（缓存命中 N）」——命中 Prompt Cache 的部分单列，便于区分真实计费量。
+  - Trace 详情是**左右分栏**：左边是瀑布图，右边固定显示选中 span 的 Input / Output / Metadata / Evaluation / Comments。
+    点左侧任意 span，右栏内容立刻切换；两栏各自滚动、互不遮挡，所以可以一边看某个 span 的详情一边对照时间线。
+    从「Observations」列表带 `?spanId=` 点进来时右栏直接定位到该 span。tokens 口径为「输入 / 输出（缓存命中 N）」——命中 Prompt Cache 的部分单列，便于区分真实计费量。
 - **协作动作**（详情面板内）：打标签、评论、人工评分（1-5 分）、收录数据集（弹窗内可直接新建数据集，无需预先创建）。
 - **保存视图**：当前筛选条件可命名保存，下次从「视图 ▾」一键套用，也可删除（有确认）。
 - **导出**：右上「导出 CSV」（按当前筛选导出全部页，不止当前一页）。
