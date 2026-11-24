@@ -201,8 +201,14 @@ def build_traces(records, session_id, agent_key="dsh", with_content=True):
             "output": _clip(t["assistant"]) if with_content else None,
             "attributes": {"turn": key, "cwd": cwd, "agentPreset": preset},
         }
+        # 同一 callId 可能有多条 tool/result（DSH 会重复记录结果事件）。用哈希做 spanId 会让它们撞在一起，
+        # 服务端按 traceId+spanId 去重后只留一条——结果是对的，但"上报数≠入库数"会让人误判丢数据，所以这里自己先去重。
+        seen_span_ids = {root["spanId"]}
         spans = [root]
         for child in t["spans"]:
+            if child["spanId"] in seen_span_ids:
+                continue
+            seen_span_ids.add(child["spanId"])
             child["parentSpanId"] = span_id_root
             spans.append(child)
         trace_id = ("dsh-%s-t%d" % (session_id[:24], key))[:64]

@@ -127,6 +127,23 @@ class BuildTracesTest(unittest.TestCase):
         self.assertEqual(dsh_sync.build_traces(records, SESSION_ID), [])
 
 
+class DuplicateResultTest(unittest.TestCase):
+    """同一 callId 出现多条 tool/result 时只应产生一个 span（否则上报数≠入库数）。"""
+
+    def test_repeated_tool_result_does_not_duplicate_span(self):
+        records = list(RECORDS) + [
+            rec("tool/result", 24, 1794023561500,
+                {"turn": 2, "step": 1,
+                 "message": {"role": "tool", "toolCallId": "ffffffffffffffffffffffffffffffff",
+                             "content": [{"type": "text", "text": "command failed (again)"}],
+                             "isError": True}}),
+        ]
+        traces = dsh_sync.build_traces(records, SESSION_ID)
+        turn2 = [t for t in traces if t["turn"] == 2][0]
+        ids = [s["spanId"] for s in turn2["spans"]]
+        self.assertEqual(len(ids), len(set(ids)), "同一 trace 内 spanId 不得重复")
+
+
 class PushReportingTest(unittest.TestCase):
     """服务端 rejected 不能当成功——否则"部分丢失"会被静默忽略。"""
 
