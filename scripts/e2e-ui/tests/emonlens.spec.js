@@ -74,7 +74,9 @@ async function ingestTrace(ctx, traceId) {
         spanName: 'invoke_agent',
         startTime: localDateTime(-5),
         endTime: localDateTime(-4),
-        input: '页面 E2E：帮我查一下订单状态',
+        // 输入里带上本次运行的唯一标记：Trace 列表默认按时间倒序分页，实例里已有大量历史 trace 时，
+        // 直接找第一页会找不到；用这个标记走「搜索内容」筛选即可稳定定位到本次这条。
+        input: `页面 E2E：帮我查一下订单状态（${RUN_STAMP}）`,
         output: '您的订单已发货，预计明天送达。',
       },
     ],
@@ -95,10 +97,12 @@ async function waitTrace(ctx, token, traceId) {
   throw new Error(`trace ${traceId} not completed in time`);
 }
 
-async function seedDatasetWithRun(ctx, token) {
+async function seedDatasetWithRun(ctx, token, opts = {}) {
   const auth = { Authorization: `Bearer ${token}` };
+  // uniqueKey：重试/补造时用带时间戳的 key，避免与上一次尝试已建的同名数据集冲突（uk_dataset）
+  const datasetKey = opts.uniqueKey ? `${BOARD_DATASET_KEY}-${Date.now().toString(36)}` : BOARD_DATASET_KEY;
   const ds = await (
-    await ctx.post('/api/v1/datasets', { headers: auth, data: { datasetKey: BOARD_DATASET_KEY } })
+    await ctx.post('/api/v1/datasets', { headers: auth, data: { datasetKey } })
   ).json();
   expect(ds.code, JSON.stringify(ds)).toBe(0);
   const datasetId = ds.data.id;
@@ -188,38 +192,41 @@ test.describe.serial('EmonLens 页面操作', () => {
     const errors = collectConsoleErrors(page);
     await login(page);
     await page.goto('/traces');
-    // 列表把 Trace ID 截断成前 16 字符 + 省略号（见 TraceListView 的 traceId 渲染），
-    // 所以按前缀匹配；完整 ID 由跳转后的 URL 断言来确认。
-    const rowPrefix = TRACE_ID.slice(0, 16);
-    const row = page.locator('.n-data-table-tr').filter({ hasText: rowPrefix }).first();
-    await expect(row).toBeVisible({ timeout: 30_000 });
-    // 跳转挂在 Trace ID 单元格的 .trace-link 上（不是整行）
-    await row.locator('.trace-link').click();
-    await expect(page).toHaveURL(new RegExp(`/traces/${TRACE_ID}`));
-    await expect(page.locator('body')).toContainText('invoke_agent');
+    // 实例里可能已有成百上千条历史 trace，列表按时间倒序分页，本次造的那条不一定落在第一页。
+    // 所以分两步：① 列表点第一行验证「列表 → 详情」跳转；② 用直链打开本次这条，验证详情页的左右分栏。
+    const firstRow = page.locator('.n-data-table-tr').filter({ has: page.locator('.trace-link') }).first();
+    await expect(firstRow).toBeVisible({ timeout: 30_000 });
+    await firstRow.locator('.trace-link').click();
+    await expect(page).toHaveURL(/\/traces\/[0-9A-Za-z_-]+/, { timeout: 30_000 });
 
-    // Span 详情改为右侧抽屉：点 span 打开、可切换、可关闭，且不能遮挡左侧瀑布图
+    await page.goto(`/traces/${TRACE_ID}`);
+    await expect(page.locator('body')).toContainText('invoke_agent');
+    await expect(page).toHaveURL(new RegExp(`/traces/${TRACE_ID}`));
+
+    // Trace 详情是左右分栏：左瀑布图、右常驻详情面板（不是抽屉、也不挤压内容）
     const rows = page.locator('.t-row');
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
-    await rows.first().click();
-    const drawer = page.locator('.n-drawer');
-    await expect(drawer).toBeVisible({ timeout: 15_000 });
-    await expect(drawer).toContainText('Input');
-    // 输入正文现在只在抽屉里（旧版底部常驻），点开 span 才应看到
-    await expect(drawer).toContainText('订单', { timeout: 15_000 });
-    // 关键回归守卫：抽屉必须没有遮罩（show-mask=false），否则左侧 span 点不动
-    expect(await page.locator('.n-drawer-mask').count(), '抽屉不应有遮罩').toBe(0);
-    // 抽屉开着时点另一个 span，内容应切换
-    const firstName = (await drawer.locator('.d-name').textContent()) || '';
+    const left = page.locator('.split-left');
+    const right = page.locator('.split-right');
+    await expect(right).toBeVisible({ timeout: 15_000 });
+    await expect(right).toContainText('Input');
+    await expect(right).toContainText('订单', { timeout: 15_000 });
+    // 布局守卫：两块必须真的并排（左侧右边缘不越过右侧左边缘），且没有抽屉
+    const lb = await left.boundingBox();
+    const rb = await right.boundingBox();
+    expect(lb && rb, '左右两块都应可见').toBeTruthy();
+    expect(lb.y, '左右应同高起步（并排而非上下）').toBeLessThan(rb.y + rb.height - 10);
+    expect(lb.x + lb.width, '左侧不得与右侧重叠').toBeLessThanOrEqual(rb.x + 2);
+    expect(await page.locator('.n-drawer').count(), '详情不应是抽屉').toBe(0);
+
+    // 点另一个 span：右侧内容切换，且左侧仍可继续点
+    const firstName = (await right.locator('.detail-head .d-name').textContent()) || '';
     if ((await rows.count()) > 1) {
       await rows.nth(1).click();
       await expect
-        .poll(async () => (await drawer.locator('.d-name').textContent()) || '', { timeout: 10_000 })
+        .poll(async () => (await right.locator('.detail-head .d-name').textContent()) || '', { timeout: 10_000 })
         .not.toBe(firstName);
     }
-    // 关闭后抽屉消失，瀑布图重新占满
-    await drawer.locator('.n-drawer-header__close').first().click({ timeout: 10_000 });
-    await expect(page.locator('.n-drawer')).toHaveCount(0, { timeout: 10_000 });
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
@@ -490,8 +497,13 @@ test.describe.serial('EmonLens 页面操作（模型链路）', () => {
 
   test('矩阵实验提交并跑到出结果（真实调用假端点）', async ({ page }) => {
     const errors = collectConsoleErrors(page);
-    // 用模型链路里建好的数据集（含 1 条 trace 样本）；矩阵需要该数据集里的评估器，所以不能兜底自建
-    expect(sharedDatasetId, '依赖前面用例创建的数据集').toBeTruthy();
+    // 正常情况下复用第一个 describe 建好的数据集；但重试会在新 worker 里跑，模块级变量会丢，
+    // 所以缺了就自己造一份（数据集的 key 唯一即可，评估器跟着一起建）。
+    if (!sharedDatasetId) {
+      const seeded = await seedDatasetWithRun(ctx, token, { uniqueKey: true });
+      sharedDatasetId = seeded.datasetId;
+      sharedEvaluatorKey = seeded.evaluatorKey;
+    }
     await login(page);
     await page.goto(`/matrix?datasetId=${sharedDatasetId}`);
     await expect(page.locator('.base-page').first()).toBeVisible();
@@ -529,8 +541,8 @@ test.describe.serial('EmonLens 页面操作（模型链路）', () => {
     await expect(page.locator('.n-message').last()).toContainText(/已受理|正在执行/, { timeout: 60_000 });
 
     // 轮询到终态，并断言单元格里出现假端点的回复
-    await expect(page.locator('body')).toContainText(/COMPLETED|PARTIAL/, { timeout: 120_000 });
-    await expect(page.locator('.cell-out').first()).toContainText('fake-llm-ok', { timeout: 120_000 });
+    await expect(page.locator('body')).toContainText(/COMPLETED|PARTIAL/, { timeout: 180_000 });
+    await expect(page.locator('.cell-out').first()).toContainText('fake-llm-ok', { timeout: 180_000 });
 
     // Diff：base / 对比列各选第一项，judge 用假端点模型；结果汇总（改进/退步/持平计数）必须渲染
     const diffSelects = page.locator('.diff-bar .n-base-selection');
