@@ -1,5 +1,5 @@
 <template>
-  <div class="trace-panel" :class="{ 'page-mode': mode === 'page' }">
+  <div class="trace-panel" :class="{ 'page-mode': mode === 'page' }" :style="panelStyle">
     <!-- 身份行 + 关键指标行作为整体吸顶：下面 Observations/瀑布滚走。
          整页模式下滚动发生在外层 .content，且 .trace-panel 已 overflow:visible，
          所以这里的 sticky 有生效的包含块。 -->
@@ -104,7 +104,7 @@
         <div class="tree-scroll">
           <div class="tree">
             <div v-for="node in visibleRows" :key="node.spanId" class="t-row"
-              :class="{ selected: selected?.spanId === node.spanId }" @click="selected = node">
+              :class="{ selected: selected?.spanId === node.spanId }" @click="openSpan(node)">
               <div class="t-name" :style="{ paddingLeft: (6 + node.depth * 16) + 'px' }">
                 <span v-if="node.childCount" class="tw-caret" :title="expanded.has(node.spanId) ? '收起' : '展开'"
                   @click.stop="toggleExpand(node.spanId)">{{ expanded.has(node.spanId) ? '▾' : '▸' }}</span>
@@ -130,15 +130,31 @@
         </div>
       </div>
 
-      <!-- 详情 Tabs -->
-      <div class="detail-tabs">
-        <n-tabs type="line" size="small" v-model:value="tab">
-          <n-tab name="input">Input</n-tab>
-          <n-tab name="output">Output</n-tab>
-          <n-tab name="metadata">Metadata</n-tab>
-          <n-tab :name="'evaluation'">Evaluation（{{ (detail.findings || []).length + (evalResults.length) }}）</n-tab>
-          <n-tab :name="'comments'">Comments（{{ comments.length }}）</n-tab>
-        </n-tabs>
+      <!--
+        Span 详情抽屉：点 span 打开，替代原来常驻在底部的 Tabs 区。
+        mask=false + block-scroll=false：抽屉不盖遮罩、不锁页面滚动，左侧瀑布图仍可继续点，
+        方便一边看一个 span 一边对照别的 span。宽度上限 760px，窄屏按视口比例收。
+      -->
+      <n-drawer v-model:show="showSpanDetail" placement="right" :width="drawerWidth" :show-mask="false"
+        :mask-closable="false" :block-scroll="false" :auto-focus="false" :trap-focus="false">
+        <n-drawer-content closable :native-scrollbar="false" class="span-drawer">
+          <template #header>
+            <div class="drawer-head">
+              <span v-if="selected" class="type-dot" :style="{ background: typeColor(selected.spanType) }"></span>
+              <span class="d-name">{{ selected ? (selected.spanName || selected.toolName || selected.spanType) : 'Span 详情' }}</span>
+              <n-tag v-if="selected" size="tiny" :bordered="false">{{ enumText('spanType', selected.spanType) }}</n-tag>
+              <n-tag v-if="selected && selected.status === 'ERROR'" size="tiny" type="error" :bordered="false">ERROR</n-tag>
+              <span v-if="selected" class="d-dur num">{{ fmtDur(selected.durationMs) }}</span>
+            </div>
+          </template>
+
+          <n-tabs type="line" size="small" v-model:value="tab">
+            <n-tab name="input">Input</n-tab>
+            <n-tab name="output">Output</n-tab>
+            <n-tab name="metadata">Metadata</n-tab>
+            <n-tab :name="'evaluation'">Evaluation（{{ (detail.findings || []).length + (evalResults.length) }}）</n-tab>
+            <n-tab :name="'comments'">Comments（{{ comments.length }}）</n-tab>
+          </n-tabs>
 
         <div v-if="tab === 'input'" class="tab-body">
           <template v-if="selected">
@@ -203,7 +219,8 @@
           </div>
           <EmptyState v-if="!comments.length" text="暂无评论" />
         </div>
-      </div>
+        </n-drawer-content>
+      </n-drawer>
     </div>
 
     <!-- 人工评分 -->
@@ -225,7 +242,7 @@
 </template>
 
 <script setup>
-import { computed, h, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NIcon, NTag } from 'naive-ui'
 import { ThumbsUpOutline, ThumbsDownOutline } from '@vicons/ionicons5'
@@ -255,6 +272,19 @@ const detail = ref(null)
 const loadError = ref('')
 const selected = ref(null)
 const tab = ref('input')
+// Span 详情抽屉：点 span 打开；不锁滚动、无遮罩，左侧瀑布图仍可继续点
+const showSpanDetail = ref(false)
+const viewportWidth = ref(typeof window === 'undefined' ? 1440 : window.innerWidth)
+const drawerWidth = computed(() => Math.min(760, Math.max(430, Math.round(viewportWidth.value * 0.46))))
+function onViewportResize() { viewportWidth.value = window.innerWidth }
+// 抽屉不遮挡内容：打开时给面板右侧留出与抽屉等宽的空间，瀑布图整体可见、可点
+const panelStyle = computed(() => ({ paddingRight: showSpanDetail.value ? drawerWidth.value + 'px' : '0px' }))
+function openSpan(node) {
+  // 换到另一个 span 时回到 Input 页，避免停留在上一个 span 的 Metadata 上造成错觉
+  if (!selected.value || selected.value.spanId !== node.spanId) tab.value = 'input'
+  selected.value = node
+  showSpanDetail.value = true
+}
 const loading = ref(true)
 const evalResults = ref([])
 const tags = ref([])
@@ -285,7 +315,11 @@ function onSessionSelect(key) {
 }
 
 watch(traceId, load)
-onMounted(load)
+onMounted(() => {
+  load()
+  window.addEventListener('resize', onViewportResize)
+})
+onUnmounted(() => window.removeEventListener('resize', onViewportResize))
 
 function goTrace(id) {
   if (!id) return
@@ -322,6 +356,10 @@ async function load() {
     const spans = detail.value?.spans || []
     selected.value = (wantSpanId && spans.find((s) => s.spanId === wantSpanId))
       || spans.find((s) => s.spanType === 'llm') || spans[0] || null
+    // 从 Observations 列表带 ?spanId= 点进来时直接打开抽屉：用户点的就是这个 span
+    if (wantSpanId && spans.some((s) => s.spanId === wantSpanId)) {
+      showSpanDetail.value = true
+    }
     if (wantSpanId && !spans.find((s) => s.spanId === wantSpanId)) {
       collapsed.value = false   // 找不到时展开全部便于人工定位
     }
@@ -619,13 +657,17 @@ const findingColumns = [
 </script>
 
 <style scoped>
-.trace-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.trace-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: auto; transition: padding-right 0.18s ease; }
 /* 整页模式：卡片占满视口剩余高度；span 树与 Tab 标签固定，仅 Tab 内容区滚动 */
 .trace-panel.page-mode { overflow: hidden; height: 100%; min-height: 0; }
 .trace-panel.page-mode .panel-body { flex: 1; min-height: 0; overflow: hidden; }
-.trace-panel.page-mode .sec-block { flex: 0 0 auto; }
-.trace-panel.page-mode .detail-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.trace-panel.page-mode .tab-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+/* 详情改抽屉后，整页模式下把原本留给底部 Tabs 的高度让给 span 树 */
+.trace-panel.page-mode .sec-block { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.trace-panel.page-mode .tree-scroll { flex: 1; height: auto; min-height: 200px; }
+/* Span 详情抽屉：标题行排版 */
+.drawer-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.drawer-head .d-name { font-size: 14px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-head .d-dur { color: var(--text-muted); font-size: 12px; margin-left: auto; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .head-id { font-size: 13px; font-weight: 600; color: var(--text-primary) !important; }
 /* 图标按钮行比页头工具更密（仅图标），gap 收敛到 4 */
@@ -649,8 +691,8 @@ const findingColumns = [
 .mono { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
 .panel-body { display: flex; flex-direction: column; min-height: 0; }
 .sec-block { margin-top: 12px; }
-.panel-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.panel-title { font-size: 11.5px; font-weight: 600; color: var(--text-muted); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+.panel-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 6px; }
+.panel-title { font-size: 11.5px; font-weight: 600; color: var(--text-muted); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
 .tl-ruler { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .tl-ruler-track { flex: 1; display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); border-bottom: 1px dashed var(--border); padding-bottom: 2px; }
 .t-empty { padding: 18px 8px; text-align: center; font-size: 12px; color: var(--text-muted); }
@@ -670,8 +712,8 @@ const findingColumns = [
 .t-title { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
 .t-meta { flex: 0 1 auto; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t-dur { flex: 0 0 84px; text-align: right; font-size: 11.5px; color: var(--text-secondary); white-space: nowrap; }
-.type-legend { display: inline-flex; gap: 10px; margin-left: 12px; }
-.legend-item { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--text-muted); }
+.type-legend { display: inline-flex; gap: 10px; margin-left: 12px; flex-wrap: wrap; }
+.legend-item { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--text-muted); white-space: nowrap; }
 .legend-item .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
 .tab-body { padding-top: 12px; }
 .io-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }

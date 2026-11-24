@@ -197,7 +197,29 @@ test.describe.serial('EmonLens 页面操作', () => {
     await row.locator('.trace-link').click();
     await expect(page).toHaveURL(new RegExp(`/traces/${TRACE_ID}`));
     await expect(page.locator('body')).toContainText('invoke_agent');
-    await expect(page.locator('body')).toContainText('订单');
+
+    // Span 详情改为右侧抽屉：点 span 打开、可切换、可关闭，且不能遮挡左侧瀑布图
+    const rows = page.locator('.t-row');
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    await rows.first().click();
+    const drawer = page.locator('.n-drawer');
+    await expect(drawer).toBeVisible({ timeout: 15_000 });
+    await expect(drawer).toContainText('Input');
+    // 输入正文现在只在抽屉里（旧版底部常驻），点开 span 才应看到
+    await expect(drawer).toContainText('订单', { timeout: 15_000 });
+    // 关键回归守卫：抽屉必须没有遮罩（show-mask=false），否则左侧 span 点不动
+    expect(await page.locator('.n-drawer-mask').count(), '抽屉不应有遮罩').toBe(0);
+    // 抽屉开着时点另一个 span，内容应切换
+    const firstName = (await drawer.locator('.d-name').textContent()) || '';
+    if ((await rows.count()) > 1) {
+      await rows.nth(1).click();
+      await expect
+        .poll(async () => (await drawer.locator('.d-name').textContent()) || '', { timeout: 10_000 })
+        .not.toBe(firstName);
+    }
+    // 关闭后抽屉消失，瀑布图重新占满
+    await drawer.locator('.n-drawer-header__close').first().click({ timeout: 10_000 });
+    await expect(page.locator('.n-drawer')).toHaveCount(0, { timeout: 10_000 });
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
