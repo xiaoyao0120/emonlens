@@ -300,10 +300,27 @@ def verify_monitor_flow(bad_tid, mon):
 
 
 # ---------------------------------------------------------------- 7. 评估器与评估
+def _walk_evaluators(key, page_size=50, max_pages=40):
+    """按页找评估器。
+
+    以前直接取第一页 pageSize=50 就断言"列表可见"，实例里积累到 20+ 条之后，
+    要找工作区里较早的那个 key 就会翻到第二页，检查随之误报失败。
+    """
+    for page in range(1, max_pages + 1):
+        code, j = req("GET", f"/api/v1/evaluators?pageNumber={page}&pageSize={page_size}", token=TOKEN)
+        body = data_of(j)
+        recs = (body or {}).get("records") if isinstance(body, dict) else body
+        recs = recs or []
+        hit = next((e for e in recs if (e.get("evaluatorKey") or "") == key), None)
+        if hit:
+            return hit
+        if len(recs) < page_size:
+            return None
+    return None
+
+
 def _find_evaluator(key):
-    code, j = req("GET", "/api/v1/evaluators?pageNumber=1&pageSize=50", token=TOKEN)
-    recs = (data_of(j) or {}).get("records") if isinstance(data_of(j), dict) else data_of(j)
-    return next((e for e in (recs or []) if (e.get("evaluatorKey") or "") == key), None)
+    return _walk_evaluators(key)
 
 
 def verify_evaluation(tid):
@@ -318,9 +335,9 @@ def verify_evaluation(tid):
                        "spec": {"type": "EXPRESSION", "passWhen": "error_count == 0"}}, token=TOKEN)
         check("evaluator", "创建 EXPRESSION 评估器", ok(j), j)
         ev = _find_evaluator("e2e-no-error")
-    code, j = req("GET", "/api/v1/evaluators?pageNumber=1&pageSize=20", token=TOKEN)
-    recs = (data_of(j) or {}).get("records") if isinstance(data_of(j), dict) else data_of(j)
-    check("evaluator", "评估器列表可见", any((e.get("evaluatorKey") or "") == "e2e-no-error" for e in (recs or [])), j)
+    # 翻页查找，而不是只看第一页：工作区里评估器多了以后，第一页不一定包含它
+    visible = _walk_evaluators("e2e-no-error") is not None
+    check("evaluator", "评估器列表可见（翻页查找）", visible)
     if not ev:
         return None
     code, j = req("POST", "/api/v1/evaluations/run",

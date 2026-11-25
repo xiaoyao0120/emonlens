@@ -391,27 +391,45 @@ async function resetFilters() {
   await search()
 }
 
+// 筛选下拉的候选项（Agent/标签/环境/Prompt/模型）只是给下拉用的，不该挡住列表首屏。
+// 以前这里是 5 个请求串行 await，最后才 load()：其中用量接口要扫 7 天数据（修前 7.5 秒），
+// 于是"打开调用链路"实际在等这些下拉项。现在先出列表，候选并行加载、失败了也不影响列表。
+async function loadFilterOptions() {
+  const [overview, tags, envs, prompts, usage] = await Promise.allSettled([
+    api.scoreOverview(),
+    api.distinctTags(),
+    api.environments(),
+    api.prompts({ pageNumber: 1, pageSize: 100 }),
+    api.usage('7d'),
+  ])
+  if (overview.status === 'fulfilled') {
+    agentOptions.value = Object.keys(overview.value || {}).map((k) => ({ label: k, value: k }))
+  }
+  if (tags.status === 'fulfilled') {
+    tagOptions.value = (tags.value || []).map((t) => ({ label: t, value: t }))
+  }
+  if (envs.status === 'fulfilled') {
+    envOptions.value = (envs.value || []).map((t) => ({ label: t, value: t }))
+  }
+  if (prompts.status === 'fulfilled') {
+    const records = prompts.value?.records || []
+    promptOptions.value = [...new Set(records.map((r) => r.name))].map((n) => ({ label: n, value: n }))
+  }
+  if (usage.status === 'fulfilled') {
+    modelOptions.value = (usage.value?.models || [])
+      .map((m) => ({ label: m.model || m.modelName, value: m.model || m.modelName }))
+      .filter((o) => o.value)
+  }
+}
+
 onMounted(async () => {
   if (route.query.traceId) {
     router.replace('/traces/' + encodeURIComponent(String(route.query.traceId)))
     return
   }
   loadFiltersFromUrl()
-  try {
-    const overview = await api.scoreOverview()
-    agentOptions.value = Object.keys(overview || {}).map((k) => ({ label: k, value: k }))
-  } catch (e) { /* ignore */ }
-  try { tagOptions.value = (await api.distinctTags() || []).map((t) => ({ label: t, value: t })) } catch (e) { /* ignore */ }
-  try { envOptions.value = (await api.environments() || []).map((t) => ({ label: t, value: t })) } catch (e) { /* ignore */ }
-  try {
-    const pPage = await api.prompts({ pageNumber: 1, pageSize: 100 })
-    promptOptions.value = [...new Set((pPage.records || []).map((r) => r.name))].map((n) => ({ label: n, value: n }))
-  } catch (e) { /* ignore */ }
-  try {
-    const usage = await api.usage('7d')
-    modelOptions.value = (usage.models || []).map((m) => ({ label: m.model || m.modelName, value: m.model || m.modelName })).filter((o) => o.value)
-  } catch (e) { /* ignore */ }
-  await load()
+  await load()                 // 先把列表画出来
+  void loadFilterOptions()     // 下拉候选随后补上，不阻塞首屏
 })
 </script>
 

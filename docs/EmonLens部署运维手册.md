@@ -403,6 +403,14 @@ docker compose logs mysql # 数据库日志
 | `/actuator/health` 503 | MySQL 未就绪或连接数耗尽；`docker compose logs mysql` |
 | 页面 404 | 前端产物未内嵌：`make build` 后重新打包，或 compose `--build` |
 | **中文全是乱码**（工作空间名/菜单/角色/通知模板） | 种子数据被双重编码。`sql/emonlens-mysql.sql` 必须以 `SET NAMES utf8mb4;` 开头——MySQL 官方 CLI 的 `character_set_client` 默认 latin1，docker-entrypoint 用它加载 init 脚本时会把 UTF-8 字节当 latin1 再转存。确认存在该行后 `docker compose down -v && make up` 重建卷；校验：`docker exec emonlens-mysql mysql -uroot -p emonlens -N -e "SELECT HEX(name) FROM et_workspace"`，正确值为 `E9BB98E8AEA4...`（单次编码）而非 `C3A9C2BB...`（双重编码） |
+| **「调用链路」打开很慢** | 先看 `/api/v1/dashboard/usage?window=7d` 的耗时（浏览器 Network 或 curl 计时）。这条曾经是 7.5 秒：① 后端把窗口内所有 span 逐行取回内存再求和——已下推为 `SUM() GROUP BY trace_id`；② token 列不在索引里导致全表回表——已加覆盖索引 `idx_span_token_cover`；③ 前端把 5 个筛选下拉的请求串行 await 在列表之前——已改为列表先出、候选并行补。改后：7d 155ms、30d 450ms（7.3 万 span / 1300 trace）。若是新库仍慢，先确认迁移 `2026-11-25-span-token-cover-index.sql` 已应用 |
+
+### 7.1 用量/成本聚合为什么这样查
+
+`/dashboard/usage` 的时间窗聚合走两条路：trace 级指标读 `et_trace_summary`（有 `idx_trace_ws_start`），
+token 级指标读 `et_span_event` 并在 SQL 里 `SUM() GROUP BY trace_id`（走覆盖索引）。
+**不要**改成"把 span 全部查出来再在 Java 里累加"——那是改造前的写法，10 万级 span 就是秒级到十秒级；
+判断有没有退化，可以看 `sumTokensByTraceIds` 是否仍然只回每个 trace 一行。
 
 ## 8. 本地开发约定
 

@@ -320,6 +320,8 @@ CREATE INDEX idx_audit_ws_time ON et_audit_log (workspace_id, created_at);
 -- 时间窗列表 / 保留期扫描索引
 CREATE INDEX idx_trace_ws_start ON et_trace_summary (workspace_id, start_time);
 CREATE INDEX idx_span_ws_start ON et_span_event (workspace_id, start_time);
+-- 用量聚合（SUM(tokens) GROUP BY trace_id）走覆盖索引，避免回表
+CREATE INDEX idx_span_token_cover ON et_span_event (workspace_id, trace_id, input_tokens, output_tokens, cached_input_tokens);
 CREATE INDEX idx_content_created ON et_content (created_at);
 CREATE INDEX idx_score_computed ON et_score (computed_at);
 CREATE INDEX idx_push_created ON et_push_record (created_at);

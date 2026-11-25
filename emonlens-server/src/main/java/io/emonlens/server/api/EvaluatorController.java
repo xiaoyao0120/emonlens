@@ -351,6 +351,9 @@ public class EvaluatorController {
         map.put("spec", evaluatorService.fromJson(entity.getSpecJson()));
         map.put("enabled", entity.getEnabled());
         map.put("version", entity.getVersion());
+        // 列表按 created_at 倒序，却一直没把这个字段返回给前端（新建的评估器看不出创建时间）
+        map.put("createdAt", entity.getCreatedAt());
+        map.put("updatedAt", entity.getUpdatedAt());
         return map;
     }
 

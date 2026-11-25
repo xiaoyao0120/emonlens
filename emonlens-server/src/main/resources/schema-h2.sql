@@ -1458,6 +1458,7 @@ CREATE INDEX IF NOT EXISTS idx_end_user_feedback_agent
 -- 时间窗列表 / 保留期扫描索引（H2 demo 与 MySQL 保持同等计划）
 CREATE INDEX IF NOT EXISTS idx_trace_ws_start ON et_trace_summary (workspace_id, start_time);
 CREATE INDEX IF NOT EXISTS idx_span_ws_start ON et_span_event (workspace_id, start_time);
+CREATE INDEX IF NOT EXISTS idx_span_token_cover ON et_span_event (workspace_id, trace_id, input_tokens, output_tokens, cached_input_tokens);
 CREATE INDEX IF NOT EXISTS idx_content_created ON et_content (created_at);
 CREATE INDEX IF NOT EXISTS idx_score_computed ON et_score (computed_at);
 CREATE INDEX IF NOT EXISTS idx_notify_created ON et_notify_record (created_at);
