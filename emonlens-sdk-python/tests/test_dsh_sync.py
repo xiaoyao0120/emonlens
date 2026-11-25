@@ -23,7 +23,7 @@ def rec(rtype, seq, time_ms, data):
     return {"type": rtype, "seq": seq, "time": time_ms, "data": data}
 
 
-SESSION_ID = "ff91948e-520e-41a7-ab77-7535dfa8ae20"
+SESSION_ID = "5f2c9a10-7d3b-4e21-9c6e-1a2b3c4d5e6f"  # 合成值，不要写真实会话 id
 
 RECORDS = [
     {"type": "session", "version": 4, "id": SESSION_ID, "createdAt": 1794023404300,

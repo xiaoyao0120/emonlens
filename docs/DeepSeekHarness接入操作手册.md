@@ -56,7 +56,7 @@ emonlens-dsh-sync --host http://你的EmonLens地址:8300 \
   --ingest-key tk-你的Key --limit 3
 
 # 只同步某一个会话（按目录名或会话 id 片段匹配都行）
-emonlens-dsh-sync --host ... --ingest-key tk-... --session ff91948e
+emonlens-dsh-sync --host ... --ingest-key tk-... --session 5f2c9a10
 
 # 只要时间线/用量，不要对话正文
 emonlens-dsh-sync --host ... --ingest-key tk-... --limit 5 --no-content
@@ -100,7 +100,7 @@ emonlens-dsh-sync --host ... --ingest-key tk-... --agent-key dsh-nightly
 traceId 形如 `dsh-<会话id前24位>-t<轮次>`，可直接用接口查：
 
 ```bash
-curl -s "$HOST/api/v1/traces/dsh-ff91948e-520e-41a7-ab77--t2" -H "Authorization: Bearer $JWT"
+curl -s "$HOST/api/v1/traces/dsh-5f2c9a10-7d3b-4e21-9c6e--t2" -H "Authorization: Bearer $JWT"
 ```
 
 ## 7. 让它自动跑（可选）
