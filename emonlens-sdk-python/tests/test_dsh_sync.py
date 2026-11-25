@@ -27,7 +27,7 @@ SESSION_ID = "5f2c9a10-7d3b-4e21-9c6e-1a2b3c4d5e6f"  # 合成值，不要写真�
 
 RECORDS = [
     {"type": "session", "version": 4, "id": SESSION_ID, "createdAt": 1794023404300,
-     "cwd": "D:/work", "isSeeded": False, "delegationDepth": 0, "agentPreset": "default"},
+     "cwd": "/home/dev/project", "isSeeded": False, "delegationDepth": 0, "agentPreset": "default"},
     rec("turn/start", 11, 1794023540938, {"turn": 1}),
     rec("user/message", 12, 1794023541000,
         {"turn": 1, "role": "user", "content": [{"type": "text", "text": "帮我查订单"}]}),
